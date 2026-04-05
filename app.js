@@ -31,6 +31,7 @@
   const linkDeleteBannerText = document.getElementById("link-delete-banner-title");
   const linkDeleteCancel = document.getElementById("link-delete-cancel");
   const linkDeleteConfirm = document.getElementById("link-delete-confirm");
+  const kinshipTooltipEl = document.getElementById("kinship-tooltip");
 
   /** @type {string | null} */
   let editingCardId = null;
@@ -59,7 +60,7 @@
   /** Минимум и запасной размер, если на поле ещё нет обычной карточки для замера */
   const CARD_H_EST = 204;
 
-  /** @type {{ id: string, el: HTMLElement, x: number, y: number, fio: string, birth: string, birthPlace: string, title: string, pinned: boolean, isUnknown?: boolean }[]} */
+  /** @type {{ id: string, el: HTMLElement, x: number, y: number, fio: string, birth: string, birthPlace: string, title: string, pinned: boolean, isUnknown?: boolean, gender?: string, maidenName?: string }[]} */
   let cards = [];
   /**
    * lineage: родитель → ребёнок (сверху/снизу).
@@ -201,20 +202,134 @@
     };
   }
 
-  function formatBirthDisplay(iso) {
-    if (!iso) return "—";
-    const d = new Date(iso + "T12:00:00");
-    if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleDateString("ru-RU", {
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-    });
+  /**
+   * Нормализует ввод даты рождения: год, год-месяц, полная дата или короткая запись Д.М.Г.
+   * Неузнаваемый текст сохраняется как ввели (например «около 1920»).
+   */
+  function normalizeBirthInput(raw) {
+    const s = String(raw || "").trim();
+    if (!s) return "";
+
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) {
+      const y = +m[1];
+      const mo = +m[2];
+      const d = +m[3];
+      const dt = new Date(y, mo - 1, d);
+      if (dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d) {
+        return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      }
+    }
+
+    m = s.match(/^(\d{4})-(\d{2})$/);
+    if (m) {
+      const y = +m[1];
+      const mo = +m[2];
+      if (y >= 1 && y <= 9999 && mo >= 1 && mo <= 12) {
+        return `${y}-${String(mo).padStart(2, "0")}`;
+      }
+    }
+
+    m = s.match(/^(\d{4})$/);
+    if (m) {
+      const y = +m[1];
+      if (y >= 1 && y <= 9999) return String(y);
+    }
+
+    m = s.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})$/);
+    if (m) {
+      const d = +m[1];
+      const mo = +m[2];
+      const y = +m[3];
+      const dt = new Date(y, mo - 1, d);
+      if (dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d) {
+        return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      }
+    }
+
+    m = s.match(/^(\d{1,2})[./-](\d{4})$/);
+    if (m) {
+      const mo = +m[1];
+      const y = +m[2];
+      if (y >= 1 && y <= 9999 && mo >= 1 && mo <= 12) {
+        return `${y}-${String(mo).padStart(2, "0")}`;
+      }
+    }
+
+    return s;
+  }
+
+  function formatBirthDisplay(stored) {
+    const s = String(stored || "").trim();
+    if (!s) return "—";
+
+    if (/^\d{4}$/.test(s)) return `${s} г.`;
+
+    if (/^\d{4}-\d{2}$/.test(s)) {
+      const parts = s.split("-");
+      const y = +parts[0];
+      const mo = +parts[1];
+      const dt = new Date(y, mo - 1, 1);
+      if (!Number.isNaN(dt.getTime())) {
+        return dt.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
+      }
+      return s;
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const d = new Date(`${s}T12:00:00`);
+      if (!Number.isNaN(d.getTime())) {
+        return d.toLocaleDateString("ru-RU", {
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+        });
+      }
+    }
+
+    return s;
   }
 
   function formatPlaceDisplay(s) {
     const t = (s || "").trim();
     return t ? t : "—";
+  }
+
+  function normalizeGender(v) {
+    return v === "f" || v === "m" ? v : "";
+  }
+
+  /** @param {HTMLFormElement | null | undefined} form */
+  function readGenderFromForm(form, inputName) {
+    if (!form) return "";
+    const r = form.querySelector(`input[name="${inputName}"]:checked`);
+    return normalizeGender(r?.value);
+  }
+
+  function syncMaidenFieldInForm(form, wrapId, inputId, radioName) {
+    const wrap = document.getElementById(wrapId);
+    const input = document.getElementById(inputId);
+    if (!wrap || !form) return;
+    const g = readGenderFromForm(form, radioName);
+    const show = g === "f";
+    wrap.hidden = !show;
+    if (!show && input) input.value = "";
+  }
+
+  function applyCardGenderMarker(cardEl, gender) {
+    const g = normalizeGender(gender);
+    const m = cardEl.querySelector("[data-gender-marker]");
+    if (!m) return;
+    m.classList.remove("card-gender-marker--f", "card-gender-marker--m");
+    if (g === "f") {
+      m.classList.add("card-gender-marker--f");
+      m.hidden = false;
+    } else if (g === "m") {
+      m.classList.add("card-gender-marker--m");
+      m.hidden = false;
+    } else {
+      m.hidden = true;
+    }
   }
 
   /**
@@ -353,10 +468,19 @@
     return [parts[0], parts[1], parts.slice(2).join(" ")];
   }
 
-  function setCardDisplayFields(cardEl, fio, birth, birthPlace) {
+  function setCardDisplayFields(cardEl, fio, birth, birthPlace, maidenName, gender) {
     const lines = splitFioLines(fio);
+    const m = (maidenName || "").trim();
+    const showMaiden = normalizeGender(gender) === "f" && m.length > 0;
     cardEl.querySelectorAll("[data-fio-line]").forEach((el, i) => {
-      el.textContent = lines[i] ?? "—";
+      if (i === 0) {
+        const sur = lines[0] ?? "—";
+        if (showMaiden && sur !== "—") el.textContent = `${sur} (${m})`;
+        else if (showMaiden && sur === "—") el.textContent = `(${m})`;
+        else el.textContent = sur;
+      } else {
+        el.textContent = lines[i] ?? "—";
+      }
     });
     const birthEl = cardEl.querySelector("[data-display-birth]");
     if (birthEl) birthEl.textContent = formatBirthDisplay(birth);
@@ -409,7 +533,7 @@
     const btn = document.getElementById("new-card-submit");
     if (!btn) return;
     const fio = document.getElementById("panel-fio")?.value?.trim() ?? "";
-    const birth = document.getElementById("panel-birth")?.value ?? "";
+    const birth = normalizeBirthInput(document.getElementById("panel-birth")?.value ?? "");
     const bp = document.getElementById("panel-birth-place")?.value?.trim() ?? "";
     const allEmpty = !fio && !birth && !bp;
     btn.textContent = allEmpty ? "Создать пустую карточку" : "Создать карточку";
@@ -437,9 +561,16 @@
     const fioEl = document.getElementById("edit-panel-fio");
     const birthEl = document.getElementById("edit-panel-birth");
     const birthPlaceEl = document.getElementById("edit-panel-birth-place");
+    const maidenEl = document.getElementById("edit-panel-maiden-name");
     if (fioEl) fioEl.value = c.fio;
     if (birthEl) birthEl.value = c.birth;
     if (birthPlaceEl) birthPlaceEl.value = c.birthPlace ?? "";
+    const gv = normalizeGender(c.gender);
+    editCardForm?.querySelectorAll('input[name="edit-panel-gender"]').forEach((inp) => {
+      inp.checked = inp.value === gv;
+    });
+    if (maidenEl) maidenEl.value = (c.maidenName || "").trim();
+    syncMaidenFieldInForm(editCardForm, "edit-maiden-wrap", "edit-panel-maiden-name", "edit-panel-gender");
     editCardBackdrop.classList.add("is-open");
     editCardPanel.classList.add("is-open");
     editCardBackdrop.setAttribute("aria-hidden", "false");
@@ -455,6 +586,7 @@
     newCardPanel.setAttribute("aria-hidden", "false");
     newCardForm.reset();
     syncNewCardSubmitLabel();
+    syncMaidenFieldInForm(newCardForm, "panel-maiden-wrap", "panel-maiden-name", "panel-gender");
     document.getElementById("panel-fio")?.focus();
   }
 
@@ -560,6 +692,170 @@
     return c.y + c.el.offsetHeight / 2;
   }
 
+  function buildKinshipAdjacency() {
+    /** @type {Map<string, Set<string>>} */
+    const parents = new Map();
+    /** @type {Map<string, Set<string>>} */
+    const children = new Map();
+    /** @type {Map<string, Set<string>>} */
+    const spouses = new Map();
+    function link(map, a, b) {
+      if (!map.has(a)) map.set(a, new Set());
+      map.get(a).add(b);
+    }
+    for (const L of links) {
+      const k = L.kind || "lineage";
+      if (k === "lineage") {
+        link(children, L.from, L.to);
+        link(parents, L.to, L.from);
+      } else if (k === "spouse") {
+        link(spouses, L.a, L.b);
+        link(spouses, L.b, L.a);
+      } else if (k === "childOfUnion") {
+        link(children, L.a, L.child);
+        link(children, L.b, L.child);
+        link(parents, L.child, L.a);
+        link(parents, L.child, L.b);
+      }
+    }
+    return { parents, children, spouses };
+  }
+
+  /**
+   * Кратчайший путь от «Я» к карточке: P — к родителю, C — к ребёнку, S — к супругу.
+   * @returns {string[] | null} null если «Я» нет на поле или пути нет
+   */
+  function shortestKinshipStepsFromSelf(targetId) {
+    if (targetId === SELF_CARD_ID) return [];
+    if (!getCardById(SELF_CARD_ID)) return null;
+    const { parents, children, spouses } = buildKinshipAdjacency();
+    const queue = [{ node: SELF_CARD_ID, path: /** @type {string[]} */ ([]) }];
+    const visited = new Set([SELF_CARD_ID]);
+    while (queue.length) {
+      const { node, path } = queue.shift();
+      /** @type {readonly [string, string][]} */
+      const edges = [
+        ...[...(parents.get(node) || [])].map((x) => /** @type {[string, string]} */ ([x, "P"])),
+        ...[...(children.get(node) || [])].map((x) => /** @type {[string, string]} */ ([x, "C"])),
+        ...[...(spouses.get(node) || [])].map((x) => /** @type {[string, string]} */ ([x, "S"])),
+      ];
+      for (const [next, step] of edges) {
+        if (visited.has(next)) continue;
+        visited.add(next);
+        const newPath = path.concat(step);
+        if (next === targetId) return newPath;
+        queue.push({ node: next, path: newPath });
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Текст подсказки: кем человек приходится главной карточке «Я».
+   * @param {string} targetId
+   */
+  function kinshipHelpTitleForCard(targetId) {
+    const card = getCardById(targetId);
+    if (!card || card.isUnknown) return "";
+    if (!getCardById(SELF_CARD_ID)) {
+      return "Нет «Я»";
+    }
+    if (targetId === SELF_CARD_ID) {
+      return "Я";
+    }
+    const steps = shortestKinshipStepsFromSelf(targetId);
+    if (!steps) {
+      return "Связи нет";
+    }
+    const g = normalizeGender(card.gender);
+    const pick = (m, f, n) => {
+      if (g === "m") return m;
+      if (g === "f") return f;
+      return n;
+    };
+    const sig = steps.join("");
+    if (sig === "P") return pick("Отец", "Мать", "Родитель");
+    if (sig === "C") return pick("Сын", "Дочь", "Ребёнок");
+    if (sig === "S") return pick("Супруг", "Супруга", "Супруг(а)");
+    if (sig === "PP") return pick("Дедушка", "Бабушка", "Бабушка или дедушка");
+    if (sig === "PC") return pick("Брат", "Сестра", "Брат или сестра");
+    if (sig === "CP") return pick("Отец ребёнка", "Мать ребёнка", "Родитель ребёнка");
+    if (sig === "CC") return pick("Внук", "Внучка", "Внук или внучка");
+    if (sig === "PS") return pick("Отчим", "Мачеха", "Супруг(а) родителя");
+    if (sig === "SP") return pick("Свёкор / тесть", "Свекровь / тёща", "Родитель супруга(и)");
+    if (sig === "SC") return pick("Пасынок", "Падчерица", "Ребёнок супруга(а)");
+    if (sig === "CS") return pick("Зять", "Невестка", "Супруг(а) ребёнка");
+    if (sig === "PPP") return pick("Прадедушка", "Прабабушка", "Прародитель");
+    if (sig === "PPC") return pick("Дядя", "Тётя", "Дядя или тётя");
+    if (sig === "PCC") return pick("Племянник", "Племянница", "Племянник или племянница");
+    if (sig === "CCC") return pick("Правнук", "Правнучка", "Правнук или правнучка");
+    /* Брат/сестра дедушки или бабушки: к прародителю вверх и к их ребёнку в сторону (не ваш прямой предок). */
+    if (sig === "PPPC") return pick("Двоюродный дед", "Двоюродная бабушка", "Двоюродный дед или двоюродная бабушка");
+    const n = steps.length;
+    if (n <= 5) return `Родственник (${n} шага)`;
+    return "Дальний род";
+  }
+
+  function refreshKinshipHelpTitles() {
+    for (const c of cards) {
+      const help = c.el.querySelector(".card-body-help");
+      if (!help) continue;
+      const t = kinshipHelpTitleForCard(c.id);
+      help.removeAttribute("title");
+      help.setAttribute("aria-label", t || "Кем приходится «Я»");
+    }
+  }
+
+  function hideKinshipTooltip() {
+    if (!kinshipTooltipEl) return;
+    kinshipTooltipEl.hidden = true;
+    kinshipTooltipEl.textContent = "";
+    kinshipTooltipEl.style.display = "";
+    kinshipTooltipEl.style.visibility = "";
+    kinshipTooltipEl.style.left = "";
+    kinshipTooltipEl.style.top = "";
+  }
+
+  /**
+   * Подсказка слева от курсора (не нативный title — без второго «?» и без всплывашки справа).
+   */
+  function positionKinshipTooltip(clientX, clientY) {
+    if (!kinshipTooltipEl || kinshipTooltipEl.hidden) return;
+    kinshipTooltipEl.style.display = "block";
+    kinshipTooltipEl.style.visibility = "hidden";
+    const tw = kinshipTooltipEl.offsetWidth;
+    const th = kinshipTooltipEl.offsetHeight;
+    const gap = 10;
+    const pad = 8;
+    let left = clientX - tw - gap;
+    let top = clientY - th / 2;
+    left = Math.max(pad, Math.min(left, window.innerWidth - tw - pad));
+    top = Math.max(pad, Math.min(top, window.innerHeight - th - pad));
+    kinshipTooltipEl.style.left = `${left}px`;
+    kinshipTooltipEl.style.top = `${top}px`;
+    kinshipTooltipEl.style.visibility = "visible";
+  }
+
+  function bindKinshipHelpTooltip(helpBtn, cardId) {
+    if (!helpBtn || !kinshipTooltipEl) return;
+    helpBtn.addEventListener("mouseenter", (ev) => {
+      const text = kinshipHelpTitleForCard(cardId);
+      if (!text) {
+        hideKinshipTooltip();
+        return;
+      }
+      kinshipTooltipEl.textContent = text;
+      kinshipTooltipEl.hidden = false;
+      positionKinshipTooltip(ev.clientX, ev.clientY);
+    });
+    helpBtn.addEventListener("mousemove", (ev) => {
+      if (!kinshipTooltipEl.hidden && kinshipTooltipEl.textContent) {
+        positionKinshipTooltip(ev.clientX, ev.clientY);
+      }
+    });
+    helpBtn.addEventListener("mouseleave", () => hideKinshipTooltip());
+  }
+
   function redrawLines() {
     const ns = "http://www.w3.org/2000/svg";
     linesLayer.innerHTML = "";
@@ -616,6 +912,7 @@
       }
     }
     syncUnionNodes();
+    refreshKinshipHelpTitles();
   }
 
   function syncUnionNodes() {
@@ -974,6 +1271,10 @@
         birthPlace: c.birthPlace ?? "",
         title: c.title ?? "",
         pinned: !!c.pinned,
+        ...(normalizeGender(c.gender) ? { gender: c.gender } : {}),
+        ...(normalizeGender(c.gender) === "f" && (c.maidenName || "").trim()
+          ? { maidenName: (c.maidenName || "").trim() }
+          : {}),
         ...(c.isUnknown ? { unknown: true } : {}),
       })),
       links: links.map((l) => JSON.parse(JSON.stringify(l))),
@@ -1008,6 +1309,9 @@
       links = Array.isArray(data.links) ? data.links : [];
       const list = Array.isArray(data.cards) ? data.cards : [];
       for (const c of list) {
+        const g = normalizeGender(c.gender);
+        const rawMaiden = typeof c.maidenName === "string" ? c.maidenName.trim() : "";
+        const maidenName = g === "f" ? rawMaiden : "";
         addCard(c.x ?? 0, c.y ?? 0, {
           id: c.id,
           fio: c.fio || "",
@@ -1015,6 +1319,8 @@
           birthPlace: c.birthPlace ?? "",
           title: c.title ?? "",
           pinned: !!c.pinned,
+          gender: g,
+          maidenName,
           isUnknown: !!(c.unknown || c.isUnknown),
         });
       }
@@ -1125,6 +1431,12 @@
   }
 
   async function initApp() {
+    document.addEventListener("pointerdown", (ev) => {
+      const t = ev.target;
+      if (t && typeof t.closest === "function" && t.closest(".card-body-help")) return;
+      hideKinshipTooltip();
+    });
+
     projectTitleBtn?.addEventListener("click", () => {
       if (!apiAvailable || currentProjectId == null) return;
       openStatsPanel();
@@ -1210,7 +1522,7 @@
   /**
    * @param {number} x
    * @param {number} y
-   * @param {{ title?: string, fio?: string, birth?: string, birthPlace?: string, id?: string, pinned?: boolean, isUnknown?: boolean }} [opts]
+   * @param {{ title?: string, fio?: string, birth?: string, birthPlace?: string, id?: string, pinned?: boolean, isUnknown?: boolean, gender?: string, maidenName?: string }} [opts]
    */
   function addCard(x, y, opts) {
     opts = opts || {};
@@ -1220,6 +1532,9 @@
     const birth = opts.birth != null ? opts.birth : "";
     const birthPlace = opts.birthPlace != null ? opts.birthPlace : "";
     const pinnedInit = !!opts.pinned;
+    const gender = normalizeGender(opts.gender);
+    let maidenName = opts.maidenName != null ? String(opts.maidenName).trim() : "";
+    if (gender !== "f") maidenName = "";
     const isUnknown = !!opts.isUnknown && id !== SELF_CARD_ID;
 
     const el = document.createElement("article");
@@ -1247,27 +1562,35 @@
         </div>
       </div>
       <div class="card-body">
-        <button type="button" class="card-unknown-layer" hidden aria-label="Указать данные человека">
-          <span class="card-unknown-placeholder">Пока неизвестно</span>
-        </button>
-        <div class="card-standard-fields">
-          <div class="card-field card-field--fio">
-            <span class="card-field-label">ФИО</span>
-            <div class="card-fio-lines" data-fio-lines>
-              <span class="card-fio-line" data-fio-line></span>
-              <span class="card-fio-line" data-fio-line></span>
-              <span class="card-fio-line" data-fio-line></span>
+        <div class="card-body-content">
+          <button type="button" class="card-unknown-layer" hidden aria-label="Указать данные человека">
+            <span class="card-unknown-placeholder">Пока неизвестно</span>
+          </button>
+          <div class="card-standard-fields">
+            <div class="card-field card-field--fio">
+              <span class="card-field-label">ФИО</span>
+              <div class="card-fio-lines" data-fio-lines>
+                <span class="card-fio-line" data-fio-line></span>
+                <span class="card-fio-line" data-fio-line></span>
+                <span class="card-fio-line" data-fio-line></span>
+              </div>
+            </div>
+            <div class="card-field">
+              <span class="card-field-label">Дата рождения</span>
+              <div class="card-field-value" data-display-birth></div>
+            </div>
+            <div class="card-field">
+              <span class="card-field-label">Место рождения</span>
+              <div class="card-field-value" data-display-birth-place></div>
             </div>
           </div>
-          <div class="card-field">
-            <span class="card-field-label">Дата рождения</span>
-            <div class="card-field-value" data-display-birth></div>
-          </div>
-          <div class="card-field">
-            <span class="card-field-label">Место рождения</span>
-            <div class="card-field-value" data-display-birth-place></div>
-          </div>
         </div>
+        <div class="card-body-rail" aria-hidden="true">
+          <span class="card-gender-marker" data-gender-marker hidden></span>
+        </div>
+        <button type="button" class="card-body-help" aria-label="">
+          <img class="card-help-img" src="public/icons/iconhelp.png" width="18" height="18" alt="" decoding="async" />
+        </button>
       </div>
     `;
 
@@ -1333,6 +1656,10 @@
       onPortPointerDown(ev, id, "right");
     });
 
+    const helpBtn = el.querySelector(".card-body-help");
+    helpBtn?.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    bindKinshipHelpTooltip(helpBtn, id);
+
     handle.addEventListener("pointerdown", (ev) => {
       if (ev.button !== 0) return;
       if (el.classList.contains("family-card--pinned")) return;
@@ -1377,9 +1704,23 @@
     });
 
     cardsLayer.appendChild(el);
-    cards.push({ id, el, x, y, fio, birth, birthPlace, title, pinned: pinnedInit, isUnknown });
+    cards.push({
+      id,
+      el,
+      x,
+      y,
+      fio,
+      birth,
+      birthPlace,
+      title,
+      pinned: pinnedInit,
+      isUnknown,
+      gender,
+      maidenName,
+    });
     applyCardVisualUnknown(el, isUnknown);
-    setCardDisplayFields(el, fio, birth, birthPlace);
+    setCardDisplayFields(el, fio, birth, birthPlace, maidenName, gender);
+    applyCardGenderMarker(el, gender);
     if (pinnedInit) setCardPinned(true);
 
     redrawLines();
@@ -1402,7 +1743,7 @@
         const birthEl = document.getElementById("welcome-birth");
         const birthPlaceEl = document.getElementById("welcome-birth-place");
         const fio = fioEl.value.trim();
-        const birth = birthEl ? birthEl.value : "";
+        const birth = normalizeBirthInput(birthEl ? birthEl.value : "");
         const birthPlace = birthPlaceEl ? birthPlaceEl.value.trim() : "";
         if (!fio) return;
         saveProfile({ completed: true, fio, birth, birthPlace });
@@ -1421,17 +1762,26 @@
     inp?.addEventListener("input", syncNewCardSubmitLabel);
     inp?.addEventListener("change", syncNewCardSubmitLabel);
   }
+  newCardForm?.querySelectorAll('input[name="panel-gender"]').forEach((inp) => {
+    inp.addEventListener("change", () => {
+      syncNewCardSubmitLabel();
+      syncMaidenFieldInForm(newCardForm, "panel-maiden-wrap", "panel-maiden-name", "panel-gender");
+    });
+  });
   newCardForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const fio = document.getElementById("panel-fio").value.trim();
-    const birth = document.getElementById("panel-birth")?.value ?? "";
+    const birth = normalizeBirthInput(document.getElementById("panel-birth")?.value ?? "");
     const birthPlace = document.getElementById("panel-birth-place")?.value?.trim() ?? "";
+    const gender = readGenderFromForm(newCardForm, "panel-gender");
+    const maidenRaw = (document.getElementById("panel-maiden-name")?.value ?? "").trim();
+    const maidenName = gender === "f" ? maidenRaw : "";
     const allEmpty = !fio && !birth && !birthPlace;
     if (!allEmpty && !fio) return;
     const pos = centerViewportForNewCard();
     const id = allEmpty
-      ? addCard(pos.x, pos.y, { isUnknown: true })
-      : addCard(pos.x, pos.y, { fio, birth, birthPlace });
+      ? addCard(pos.x, pos.y, { isUnknown: true, gender, maidenName })
+      : addCard(pos.x, pos.y, { fio, birth, birthPlace, gender, maidenName });
     closeNewCardPanel();
     requestAnimationFrame(() => {
       const c = getCardById(id);
@@ -1452,12 +1802,20 @@
 
   editCardCancel?.addEventListener("click", () => closeEditCardPanel());
   editCardBackdrop?.addEventListener("click", () => closeEditCardPanel());
+  editCardForm?.querySelectorAll('input[name="edit-panel-gender"]').forEach((inp) => {
+    inp.addEventListener("change", () => {
+      syncMaidenFieldInForm(editCardForm, "edit-maiden-wrap", "edit-panel-maiden-name", "edit-panel-gender");
+    });
+  });
   editCardForm?.addEventListener("submit", (e) => {
     e.preventDefault();
     if (!editingCardId) return;
     const fio = document.getElementById("edit-panel-fio")?.value.trim() ?? "";
-    const birth = document.getElementById("edit-panel-birth")?.value ?? "";
+    const birth = normalizeBirthInput(document.getElementById("edit-panel-birth")?.value ?? "");
     const birthPlace = document.getElementById("edit-panel-birth-place")?.value?.trim() ?? "";
+    const gender = readGenderFromForm(editCardForm, "edit-panel-gender");
+    const maidenRaw = (document.getElementById("edit-panel-maiden-name")?.value ?? "").trim();
+    const maidenName = gender === "f" ? maidenRaw : "";
     const c = getCardById(editingCardId);
     if (!c) {
       closeEditCardPanel();
@@ -1471,15 +1829,21 @@
       c.fio = "";
       c.birth = "";
       c.birthPlace = "";
+      c.gender = "";
+      c.maidenName = "";
       applyCardVisualUnknown(c.el, true);
+      applyCardGenderMarker(c.el, "");
     } else {
       if (!fio) return;
       c.isUnknown = false;
       c.fio = fio;
       c.birth = birth;
       c.birthPlace = birthPlace;
+      c.gender = gender;
+      c.maidenName = maidenName;
       applyCardVisualUnknown(c.el, false);
-      setCardDisplayFields(c.el, fio, birth, birthPlace);
+      setCardDisplayFields(c.el, fio, birth, birthPlace, c.maidenName, gender);
+      applyCardGenderMarker(c.el, gender);
     }
     if (editingCardId === SELF_CARD_ID) {
       saveProfile({ completed: true, fio: c.fio, birth: c.birth, birthPlace: c.birthPlace });

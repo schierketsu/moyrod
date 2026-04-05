@@ -62,7 +62,8 @@
         </div>
         <div class="welcome-field">
           <label for="welcome-birth">Дата рождения</label>
-          <input type="date" id="welcome-birth" name="birth" />
+          <input type="text" id="welcome-birth" name="birth" autocomplete="off" maxlength="48"
+            placeholder="Год (1945), месяц и год (1945-05) или день.месяц.год" />
         </div>
         <div class="welcome-field">
           <label for="welcome-birth-place">Место рождения</label>
@@ -124,7 +125,28 @@
           </div>
           <div class="side-panel-field">
             <label for="panel-birth">Дата рождения</label>
-            <input type="date" id="panel-birth" name="birth" />
+            <input type="text" id="panel-birth" name="birth" autocomplete="off" maxlength="48"
+              placeholder="Год, год-месяц или полная дата" />
+          </div>
+          <div class="side-panel-field side-panel-field--gender">
+            <span class="side-panel-field-legend" id="panel-gender-legend">Пол</span>
+            <div class="gender-pick" role="group" aria-labelledby="panel-gender-legend">
+              <label class="gender-swatch-label">
+                <input type="radio" name="panel-gender" value="f" class="gender-swatch-input" />
+                <span class="gender-swatch gender-swatch--f" aria-hidden="true"></span>
+                <span class="gender-swatch-sr">Женский</span>
+              </label>
+              <label class="gender-swatch-label">
+                <input type="radio" name="panel-gender" value="m" class="gender-swatch-input" />
+                <span class="gender-swatch gender-swatch--m" aria-hidden="true"></span>
+                <span class="gender-swatch-sr">Мужской</span>
+              </label>
+            </div>
+          </div>
+          <div id="panel-maiden-wrap" class="side-panel-field side-panel-field--maiden" hidden>
+            <label for="panel-maiden-name">Девичья фамилия</label>
+            <input type="text" id="panel-maiden-name" name="maidenName" autocomplete="off" maxlength="80"
+              placeholder="Фамилия до замужества" />
           </div>
           <div class="side-panel-field">
             <label for="panel-birth-place">Место рождения</label>
@@ -141,7 +163,6 @@
     <aside id="edit-card-panel" class="side-panel" aria-hidden="true">
       <div class="side-panel-inner">
         <h2 class="side-panel-title">Редактирование карточки</h2>
-        <p class="side-panel-intro">Измените ФИО, дату и место рождения.</p>
         <form id="edit-card-form" class="side-panel-form">
           <div class="side-panel-field">
             <label for="edit-panel-fio">ФИО</label>
@@ -150,7 +171,28 @@
           </div>
           <div class="side-panel-field">
             <label for="edit-panel-birth">Дата рождения</label>
-            <input type="date" id="edit-panel-birth" name="birth" />
+            <input type="text" id="edit-panel-birth" name="birth" autocomplete="off" maxlength="48"
+              placeholder="Год, год-месяц или полная дата" />
+          </div>
+          <div class="side-panel-field side-panel-field--gender">
+            <span class="side-panel-field-legend" id="edit-gender-legend">Пол</span>
+            <div class="gender-pick" role="group" aria-labelledby="edit-gender-legend">
+              <label class="gender-swatch-label">
+                <input type="radio" name="edit-panel-gender" value="f" class="gender-swatch-input" />
+                <span class="gender-swatch gender-swatch--f" aria-hidden="true"></span>
+                <span class="gender-swatch-sr">Женский</span>
+              </label>
+              <label class="gender-swatch-label">
+                <input type="radio" name="edit-panel-gender" value="m" class="gender-swatch-input" />
+                <span class="gender-swatch gender-swatch--m" aria-hidden="true"></span>
+                <span class="gender-swatch-sr">Мужской</span>
+              </label>
+            </div>
+          </div>
+          <div id="edit-maiden-wrap" class="side-panel-field side-panel-field--maiden" hidden>
+            <label for="edit-panel-maiden-name">Девичья фамилия</label>
+            <input type="text" id="edit-panel-maiden-name" name="maidenName" autocomplete="off" maxlength="80"
+              placeholder="Фамилия до замужества" />
           </div>
           <div class="side-panel-field">
             <label for="edit-panel-birth-place">Место рождения</label>
@@ -167,6 +209,8 @@
   </div>
 
   <button type="button" id="fab-add-card" class="fab-add" hidden aria-label="Добавить карточку">Добавить</button>
+
+  <div id="kinship-tooltip" class="kinship-tooltip" role="tooltip" hidden></div>
 
   <script src="app.js"></script>
 </body>
