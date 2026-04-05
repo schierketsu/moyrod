@@ -1,0 +1,13 @@
+{
+  "name": "svoi-korni",
+  "private": true,
+  "description": "Свои корни — родословная (статика + SQLite)",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "express": "^4.21.2"
+  }
+}
