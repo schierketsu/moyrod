@@ -263,6 +263,20 @@ function hasColumn(tableName, columnName) {
 if (!hasColumn("projects", "owner_user_id")) {
   db.exec("ALTER TABLE projects ADD COLUMN owner_user_id INTEGER;");
 }
+if (!hasColumn("projects", "share_for_matching")) {
+  db.exec("ALTER TABLE projects ADD COLUMN share_for_matching INTEGER NOT NULL DEFAULT 0;");
+  const rows = db.prepare("SELECT id, profile_json FROM projects").all();
+  for (const r of rows) {
+    let prof = null;
+    try {
+      prof = r.profile_json ? JSON.parse(r.profile_json) : null;
+    } catch {
+      prof = null;
+    }
+    const sm = prof?.shareForMatching === true ? 1 : 0;
+    db.prepare("UPDATE projects SET share_for_matching = ? WHERE id = ?").run(sm, r.id);
+  }
+}
 db.exec("CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_user_id);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_cards_owner ON shared_card_index(owner_user_id);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_cards_fio ON shared_card_index(fio_norm);");
@@ -530,7 +544,14 @@ api.get("/projects", requireAuth, (req, res) => {
 
 api.get("/projects/:id", requireAuth, (req, res) => {
   const id = +req.params.id;
-  const row = db.prepare("SELECT * FROM projects WHERE id = ? AND owner_user_id = ?").get(id, req.user.id);
+  const row = db
+    .prepare(
+      `SELECT id, name, updated_at, field_w, field_h, cam_x, cam_y, zoom,
+              profile_json, cards_json, links_json, owner_user_id,
+              COALESCE(share_for_matching, 0) AS share_for_matching
+       FROM projects WHERE id = ? AND owner_user_id = ?`
+    )
+    .get(id, req.user.id);
   if (!row) {
     res.status(404).json({ error: "not found" });
     return;
@@ -555,6 +576,9 @@ api.get("/projects/:id", requireAuth, (req, res) => {
   } catch {
     links = [];
   }
+  const shareForMatching = !!(
+    Number(row.share_for_matching) === 1 || profile?.shareForMatching === true
+  );
   res.json({
     id: row.id,
     name: row.name,
@@ -565,11 +589,50 @@ api.get("/projects/:id", requireAuth, (req, res) => {
     camY: row.cam_y,
     zoom: row.zoom,
     profile,
-    shareForMatching: profile?.shareForMatching === true,
+    shareForMatching,
     cards,
     links,
   });
 });
+
+/** Только флаг участия в подборе — без полного PUT (избегает гонок и перезаписи полей). */
+function handleShareForMatchingUpdate(req, res) {
+  const id = +req.params.id;
+  const row = db.prepare("SELECT * FROM projects WHERE id = ? AND owner_user_id = ?").get(id, req.user.id);
+  if (!row) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  const b = req.body || {};
+  const shareForMatching = b.shareForMatching === true || b.shareForMatching === "true";
+  let prevProfile = null;
+  try {
+    prevProfile = row.profile_json ? JSON.parse(row.profile_json) : null;
+  } catch {
+    prevProfile = null;
+  }
+  const nextProfile = { ...(prevProfile || {}), shareForMatching };
+  const now = Date.now();
+  db.prepare("UPDATE projects SET profile_json = ?, updated_at = ?, share_for_matching = ? WHERE id = ?").run(
+    JSON.stringify(nextProfile),
+    now,
+    shareForMatching ? 1 : 0,
+    id
+  );
+
+  let cards = [];
+  try {
+    cards = JSON.parse(row.cards_json || "[]");
+  } catch {
+    cards = [];
+  }
+  updateSharedCardIndex(req.user.id, id, cards, shareForMatching);
+
+  res.json({ ok: true, id, updated_at: now, shareForMatching });
+}
+
+api.patch("/projects/:id/share-for-matching", requireAuth, handleShareForMatchingUpdate);
+api.post("/projects/:id/share-for-matching", requireAuth, handleShareForMatchingUpdate);
 
 api.post("/projects", requireAuth, (req, res) => {
   const name = String(req.body?.name ?? "Без названия").trim().slice(0, 200) || "Без названия";
@@ -594,17 +657,21 @@ api.put("/projects/:id", requireAuth, (req, res) => {
   const b = req.body || {};
   const name = String(b.name ?? "").trim().slice(0, 200);
   const now = Date.now();
-  const prevRow = db.prepare("SELECT profile_json FROM projects WHERE id = ?").get(id);
+  const prevRow = db.prepare("SELECT profile_json, share_for_matching FROM projects WHERE id = ?").get(id);
   let prevProfile = null;
   try {
     prevProfile = prevRow?.profile_json ? JSON.parse(prevRow.profile_json) : null;
   } catch {
     prevProfile = null;
   }
-  const shareForMatching = b.shareForMatching === true;
-  const profileObj = b.profile !== undefined ? (b.profile || {}) : (prevProfile || {});
+  let shareForMatching = Number(prevRow?.share_for_matching) === 1 || prevProfile?.shareForMatching === true;
+  if (Object.prototype.hasOwnProperty.call(b, "shareForMatching")) {
+    shareForMatching = b.shareForMatching === true || b.shareForMatching === "true";
+  }
+  const profilePatch = b.profile !== undefined ? b.profile || {} : {};
+  const profileObj = { ...(prevProfile || {}), ...profilePatch };
   const nextProfile = {
-    ...(profileObj || {}),
+    ...profileObj,
     shareForMatching,
   };
   const profileJson = JSON.stringify(nextProfile);
@@ -622,7 +689,8 @@ api.put("/projects/:id", requireAuth, (req, res) => {
       zoom = ?,
       profile_json = ?,
       cards_json = ?,
-      links_json = ?
+      links_json = ?,
+      share_for_matching = ?
      WHERE id = ?`
   ).run(
     name || "Без названия",
@@ -635,6 +703,7 @@ api.put("/projects/:id", requireAuth, (req, res) => {
     profileJson,
     cardsJson,
     linksJson,
+    shareForMatching ? 1 : 0,
     id
   );
 

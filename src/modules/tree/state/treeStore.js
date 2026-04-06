@@ -4,8 +4,38 @@ import { projectsApi } from "../../../shared/api/projectsApi";
 const SELF_CARD_ID = "m_self";
 const PROFILE_KEY = "svoi_korni_profile_v1";
 const LAST_PROJECT_KEY = "svoi_korni_last_project_id";
+const SHARE_FLAG_MAP_KEY = "svoi_korni_share_flag_map_v1";
 const CARD_W = 232;
 const CARD_H = 204;
+
+function readShareFlagMap() {
+  try {
+    const raw = localStorage.getItem(SHARE_FLAG_MAP_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeShareFlagMap(map) {
+  try {
+    localStorage.setItem(SHARE_FLAG_MAP_KEY, JSON.stringify(map));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** API / JSON иногда отдают 1 / "true" вместо boolean — приводим к true|false|null. */
+function normalizeShareFlagFromApi(v) {
+  if (v === true || v === 1 || v === "1" || v === "true") return true;
+  if (v === false || v === 0 || v === "0" || v === "false") return false;
+  return null;
+}
+
+function shareFlagCacheKey(scope, projectId) {
+  if (scope == null || String(scope) === "" || projectId == null) return null;
+  return `${String(scope)}:${String(projectId)}`;
+}
 
 function uid() {
   return `c_${Math.random().toString(36).slice(2, 11)}`;
@@ -84,6 +114,8 @@ export const useTreeStore = defineStore("tree", {
     },
     hasUnsavedChanges: false,
     isSaving: false,
+    /** UID пользователя для ключа кэша флага «участвовать в подборе» (localStorage). */
+    shareFlagUserScope: "",
   }),
   getters: {
     cardCount: (s) => s.cards.length,
@@ -91,6 +123,10 @@ export const useTreeStore = defineStore("tree", {
     selfCard: (s) => s.cards.find((c) => c.id === SELF_CARD_ID) || s.cards[0] || null,
   },
   actions: {
+    setShareFlagUserScope(uid) {
+      this.shareFlagUserScope = uid != null && String(uid) !== "" ? String(uid) : "";
+    },
+
     async bootstrap() {
       this.ready = false;
       try {
@@ -168,6 +204,32 @@ export const useTreeStore = defineStore("tree", {
       await this.refreshProjects();
     },
 
+    async setShareForMatching(nextValue) {
+      const next = nextValue === true;
+      if (this.shareForMatching === next) return;
+      const prev = this.shareForMatching;
+      const projectId = this.currentProjectId;
+      if (!this.apiAvailable || projectId == null) return;
+
+      this.shareForMatching = next;
+      try {
+        const payload = this.serializeProject();
+        payload.shareForMatching = next;
+        if (payload.profile) payload.profile.shareForMatching = next;
+        const res = await projectsApi.saveProject(projectId, payload);
+        this.lastProjectUpdatedAt = res.updated_at || Date.now();
+        const ck = shareFlagCacheKey(this.shareFlagUserScope, projectId);
+        if (ck) {
+          const map = readShareFlagMap();
+          map[ck] = next;
+          writeShareFlagMap(map);
+        }
+      } catch (e) {
+        if (this.currentProjectId === projectId) this.shareForMatching = prev;
+        throw e;
+      }
+    },
+
     initFromProfileOnly() {
       const profile = loadProfile();
       this.cards = [];
@@ -212,7 +274,18 @@ export const useTreeStore = defineStore("tree", {
         this.zoom = Number(data.zoom) || 1;
         this.cards = Array.isArray(data.cards) ? data.cards : [];
         this.links = Array.isArray(data.links) ? data.links : [];
-        this.shareForMatching = data.shareForMatching === true;
+        const ck = shareFlagCacheKey(this.shareFlagUserScope, data.id);
+        let fromServer = normalizeShareFlagFromApi(data.shareForMatching);
+        const map = readShareFlagMap();
+        if (fromServer === null) {
+          if (ck && map[ck] === true) fromServer = true;
+          else if (ck && map[ck] === false) fromServer = false;
+          else fromServer = false;
+        } else if (ck) {
+          map[ck] = fromServer;
+          writeShareFlagMap(map);
+        }
+        this.shareForMatching = fromServer === true;
         localStorage.setItem(LAST_PROJECT_KEY, String(data.id));
         if (!this.cards.some((c) => c.id === SELF_CARD_ID) && data.profile?.fio) {
           this.cards.push({

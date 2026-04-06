@@ -27,7 +27,15 @@
         </div>
         <div class="welcome-field">
           <label>Дата рождения</label>
-          <input v-model="registerForm.birthDate" required type="date" />
+          <div class="auth-birth-parts">
+            <input v-model="registerBirth.day" required type="number" min="1" max="31" placeholder="День" />
+            <select v-model="registerBirth.month" required>
+              <option v-for="(opt, idx) in birthMonthOptions" :key="`rbm-${idx}`" :value="opt.value">
+                {{ opt.label }}
+              </option>
+            </select>
+            <input v-model="registerBirth.year" required type="number" min="1000" max="3000" placeholder="Год" />
+          </div>
         </div>
         <div class="welcome-field">
           <label>Место рождения</label>
@@ -216,12 +224,8 @@
           <div class="stats-dl-row"><dt>Связей</dt><dd>{{ tree.linkCount }}</dd></div>
           <div class="stats-dl-row"><dt>Сохранён</dt><dd>{{ formattedSavedAt }}</dd></div>
         </dl>
-        <div class="side-panel-field">
-          <label>Название проекта</label>
-          <input v-model="tree.currentProjectName" type="text" maxlength="200" />
-        </div>
         <label class="side-panel-check">
-          <input v-model="tree.shareForMatching" type="checkbox" />
+          <input :checked="tree.shareForMatching" type="checkbox" @change="onShareForMatchingChange" />
           Участвовать в поиске похожих родственников (весь проект)
         </label>
       </div>
@@ -238,6 +242,7 @@ import { useTreeStore } from "./modules/tree/state/treeStore";
 import { useAuthStore } from "./modules/auth/state/authStore";
 import { projectsApi } from "./shared/api/projectsApi";
 import { authApi } from "./shared/api/authApi";
+import { BIRTH_MONTH_OPTIONS, buildBirthFromParts } from "./shared/birthParts";
 
 const tree = useTreeStore();
 const auth = useAuthStore();
@@ -252,6 +257,8 @@ const matching = ref([]);
 const showCreateInput = ref(false);
 const createInputRef = ref(null);
 const loginForm = reactive({ uid: "", password: "" });
+const birthMonthOptions = BIRTH_MONTH_OPTIONS.filter((opt) => opt.value);
+const registerBirth = reactive({ day: "", month: "", year: "" });
 const registerForm = reactive({
   fullName: "",
   birthDate: "",
@@ -276,9 +283,18 @@ const linkDeleteBannerText = computed(() => {
 });
 
 watch(
+  () => auth.user?.uid,
+  (uid) => {
+    tree.setShareFlagUserScope(uid);
+  },
+  { immediate: true }
+);
+
+watch(
   () => auth.isAuthenticated,
   async (isAuthed) => {
     if (isAuthed) {
+      tree.setShareFlagUserScope(auth.user?.uid);
       await tree.bootstrap();
       ensureSelfCardFromAuthProfile();
       if (route.path === "/myprofile") {
@@ -344,6 +360,7 @@ function pickBirthPlace(value) {
 
 async function submitRegister() {
   authError.value = "";
+  registerForm.birthDate = buildBirthFromParts(registerBirth);
   if (!registerForm.fullName || !registerForm.birthDate || !registerForm.birthPlace || !registerForm.password) {
     authError.value = "Заполните все обязательные поля.";
     return;
@@ -417,6 +434,16 @@ function confirmDelete() {
     return;
   }
   tree.confirmLinkDelete();
+}
+
+async function onShareForMatchingChange(event) {
+  const checked = event?.target?.checked === true;
+  try {
+    await tree.setShareForMatching(checked);
+  } catch (e) {
+    // state is reverted in store on failure
+    console.error("Failed to save share-for-matching flag", e);
+  }
 }
 
 </script>

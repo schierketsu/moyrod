@@ -153,6 +153,23 @@
   color: rgba(238, 241, 240, 0.4);
 }
 
+.auth-birth-parts {
+  display: grid;
+  grid-template-columns: minmax(4.2rem, 0.8fr) minmax(7rem, 1.4fr) minmax(4.7rem, 1fr);
+  gap: 0.45rem;
+}
+
+.auth-birth-parts select {
+  width: 100%;
+  border: 1px solid var(--border-dark);
+  border-radius: 8px;
+  background: var(--field-dark);
+  color: var(--cream);
+  padding: 0.55rem 0.65rem;
+  font: inherit;
+  font-size: 0.9375rem;
+}
+
 .welcome-panel .welcome-submit {
   margin-top: 0.25rem;
   width: 100%;
@@ -1079,18 +1096,17 @@
 }
 
 .family-card--self {
-  border-width: var(--card-self-border);
-  border-color: var(--sage);
-  box-shadow: var(--shadow-sm), 0 12px 36px rgba(91, 58, 41, 0.2), 0 0 0 2px rgba(91, 58, 41, 0.22);
+  border-width: 1px;
+  border-color: var(--border-subtle);
+  box-shadow: var(--shadow-sm), 0 12px 32px rgba(0, 0, 0, 0.05);
 }
 
-/* For the "self" card keep the top bar flush with thicker border. */
+/* Self-card differs by warm top bar, not outline. */
 .family-card--self .card-drag {
-  border-radius: calc(var(--radius) - var(--card-self-border))
-    calc(var(--radius) - var(--card-self-border)) 0 0;
+  background: #e6a23a;
+  border-bottom-color: #d08a24;
 }
 
-/* Карточка «пока неизвестно»: сплошной оливковый, те же порты связей */
 .family-card--unknown {
   background: #808000;
   border-color: #6b6f00;
@@ -1194,15 +1210,6 @@
   align-items: center;
   gap: 0.4rem;
   border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0;
-}
-
-/* Keep inner corners aligned with thicker "self" border (prevents white corner gaps). */
-.family-card.family-card--self .card-drag {
-  margin: calc(var(--card-self-border) * -1) calc(var(--card-self-border) * -1) 0;
-  width: calc(100% + (var(--card-self-border) * 2));
-  border-radius: calc(var(--radius) - var(--card-self-border))
-    calc(var(--radius) - var(--card-self-border)) 0 0;
-  background-clip: padding-box;
 }
 
 .family-card .card-icon-btn {
@@ -1313,10 +1320,6 @@
   flex: 1;
   background: var(--paper);
   border-radius: 0 0 calc(var(--radius) - 1px) calc(var(--radius) - 1px);
-}
-
-.family-card.family-card--self .card-body {
-  border-radius: 0 0 calc(var(--radius) - var(--card-self-border)) calc(var(--radius) - var(--card-self-border));
 }
 
 .family-card .card-body-content {
@@ -1559,24 +1562,18 @@
   height: 18px;
   margin: 0;
   padding: 0;
-  border: 2px solid #b8bfb9;
+  border: 2px solid #fff;
   border-radius: 50%;
-  background: #fff;
+  background: #f5f5f0;
   cursor: crosshair;
   z-index: 3;
   box-shadow: var(--shadow-sm);
   transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
 
-.family-card--self .card-port {
-  border-width: 2px;
-  border-color: var(--sage);
-  background: #fafcfb;
-}
-
 .card-port:hover {
-  border-color: var(--sage);
-  background: #f4faf8;
+  border-color: #fff;
+  background: #fafaf3;
 }
 
 .card-port--top {

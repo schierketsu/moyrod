@@ -10,6 +10,7 @@ export function useCards(store, viewport) {
   const GAP_RELEASE = 14;
   /** Во время перетаскивания — меньше, чтобы не «цеплялось» за соседей. */
   const GAP_DRAG = 6;
+  const sizeCache = new Map();
 
   function blurActiveIfInside(selector) {
     const active = document.activeElement;
@@ -22,41 +23,58 @@ export function useCards(store, viewport) {
     return { left: `${card.x}px`, top: `${card.y}px` };
   }
 
-  function clampToField(_card, nx, ny) {
+  function getCardSize(cardId) {
+    if (!cardId) return { w: CARD_W, h: CARD_H };
+    const cached = sizeCache.get(cardId);
+    if (cached) return cached;
+    const el = typeof document !== "undefined" ? document.getElementById(cardId) : null;
+    const s = {
+      w: Math.max(CARD_W, el?.offsetWidth || CARD_W),
+      h: Math.max(CARD_H, el?.offsetHeight || CARD_H),
+    };
+    sizeCache.set(cardId, s);
+    return s;
+  }
+
+  function clampToField(nx, ny, w = CARD_W, h = CARD_H) {
     return {
-      x: Math.max(0, Math.min(store.fieldW - CARD_W, nx)),
-      y: Math.max(0, Math.min(store.fieldH - CARD_H, ny)),
+      x: Math.max(0, Math.min(store.fieldW - w, nx)),
+      y: Math.max(0, Math.min(store.fieldH - h, ny)),
     };
   }
 
-  function overlaps(ax, ay, bx, by, gap) {
+  function overlaps(ax, ay, aw, ah, bx, by, bw, bh, gap) {
     return (
-      ax < bx + CARD_W + gap &&
-      ax + CARD_W + gap > bx &&
-      ay < by + CARD_H + gap &&
-      ay + CARD_H + gap > by
+      ax < bx + bw + gap &&
+      ax + aw + gap > bx &&
+      ay < by + bh + gap &&
+      ay + ah + gap > by
     );
   }
 
   function resolveNoOverlap(id, x, y, axisHint, gap) {
+    const activeSize = getCardSize(id);
     let rx = x;
     let ry = y;
     for (let i = 0; i < 20; i += 1) {
       let hit = null;
+      let hitSize = null;
       for (const other of store.cards) {
         if (other.id === id) continue;
-        if (overlaps(rx, ry, other.x, other.y, gap)) {
+        const otherSize = getCardSize(other.id);
+        if (overlaps(rx, ry, activeSize.w, activeSize.h, other.x, other.y, otherSize.w, otherSize.h, gap)) {
           hit = other;
+          hitSize = otherSize;
           break;
         }
       }
       if (!hit) break;
       if (axisHint === "y") {
-        ry = ry < hit.y ? hit.y - CARD_H - gap : hit.y + CARD_H + gap;
+        ry = ry < hit.y ? hit.y - activeSize.h - gap : hit.y + hitSize.h + gap;
       } else {
-        rx = rx < hit.x ? hit.x - CARD_W - gap : hit.x + CARD_W + gap;
+        rx = rx < hit.x ? hit.x - activeSize.w - gap : hit.x + hitSize.w + gap;
       }
-      const clamped = clampToField(null, rx, ry);
+      const clamped = clampToField(rx, ry, activeSize.w, activeSize.h);
       rx = clamped.x;
       ry = clamped.y;
       axisHint = axisHint === "x" ? "y" : "x";
@@ -69,6 +87,7 @@ export function useCards(store, viewport) {
     if (ev.button !== 0) return;
     if (ev.target.closest(".card-icon-btn")) return;
     const m = viewport.fieldCoordsFromClient(ev.clientX, ev.clientY);
+    sizeCache.clear();
     const el = ev.currentTarget;
     if (el && typeof el.setPointerCapture === "function") {
       try {
@@ -107,7 +126,8 @@ export function useCards(store, viewport) {
     if (!c) return;
 
     const m = viewport.fieldCoordsFromClient(ev.clientX, ev.clientY);
-    const desired = clampToField(null, m.x - drag.value.dx, m.y - drag.value.dy);
+    const dragSize = getCardSize(drag.value.id);
+    const desired = clampToField(m.x - drag.value.dx, m.y - drag.value.dy, dragSize.w, dragSize.h);
     const axis = Math.abs(desired.x - c.x) >= Math.abs(desired.y - c.y) ? "x" : "y";
     const safe = resolveNoOverlap(drag.value.id, desired.x, desired.y, axis, GAP_DRAG);
 
@@ -128,13 +148,14 @@ export function useCards(store, viewport) {
         if (shifted) store.markDirty();
       }
     }
+    sizeCache.clear();
     drag.value = null;
   }
 
   function addCardFromDraft() {
     const d = store.newCardDraft;
     const isUnknown = !d.fio && !d.birth && !d.birthPlace;
-    const desired = clampToField(null, store.camX - 116, store.camY - 102);
+    const desired = clampToField(store.camX - 116, store.camY - 102);
     const resolved = resolveNoOverlap("", desired.x, desired.y, "x", GAP_RELEASE);
     store.addCard({
       x: resolved.x,
