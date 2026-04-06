@@ -1,19 +1,9 @@
-@font-face {
-  font-family: "Polonium";
-  src:
-    url("public/fonts/Polonium/Polonium.otf") format("opentype"),
-    url("public/fonts/Polonium/Polonium-Regular.otf") format("opentype");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-
 :root {
   /* Заданные оттенки — аккуратное применение */
   --charcoal: #212121;
   --sage: #5b3a29;
   --sage-hover: #4a2f22;
-  --sage-muted: #3b2419;
+  --sage-muted: #4b4b4b;
   --brown: #563500;
   --olive: #5b3a29;
 
@@ -33,7 +23,7 @@
   /* Шапка: плоский фон */
   --header-bg: #5b3a29;
   --header-bg-solid: #5b3a29;
-  --header-border: #3f281c;
+  --header-border: #454545;
   --header-text: #141a18;
   --header-text-muted: #2d3d38;
 
@@ -47,8 +37,8 @@
   --accent: var(--sage);
   --accent-hover: var(--sage-hover);
   --accent-soft: rgba(91, 58, 41, 0.18);
-  --focus-ring: rgba(91, 58, 41, 0.35);
-  --focus-border: var(--sage);
+  --focus-ring: rgba(0, 0, 0, 0);
+  --focus-border: #6a6a6a;
 
   /* Линии родства */
   --line: var(--sage);
@@ -58,7 +48,7 @@
 
   --radius: 12px;
   --card-w: 232px;
-  /* Минимум карточки; CARD_H_EST в app.js + высота «пустых» до замера эталона */
+  /* Минимум карточки + высота «пустых» до замера эталона */
   --card-min-h: 204px;
   --card-self-border: 2px;
   --font-ui: "JetBrains Mono", ui-monospace, monospace;
@@ -155,8 +145,8 @@
 }
 
 .welcome-field input:focus {
-  outline: 2px solid var(--focus-ring);
-  border-color: var(--focus-border);
+  outline: none;
+  border-color: var(--border-dark);
 }
 
 .welcome-field input::placeholder {
@@ -171,12 +161,12 @@
   font-weight: 600;
   background: var(--accent);
   color: var(--cream-on-accent);
-  border: 1px solid var(--sage-muted);
+  border: 1px solid transparent;
 }
 
 .welcome-panel .welcome-submit:hover {
   background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  border-color: transparent;
   filter: none;
 }
 
@@ -306,8 +296,7 @@
 }
 
 .toolbar .btn:focus-visible {
-  outline: 2px solid var(--sage-muted);
-  outline-offset: 2px;
+  outline: none;
 }
 
 /* Кнопки в шапке: светлая плашка на зелёном фоне */
@@ -658,8 +647,8 @@
 }
 
 .side-panel-field input:focus {
-  outline: 2px solid var(--focus-ring);
-  border-color: var(--focus-border);
+  outline: none;
+  border-color: var(--border-dark);
 }
 
 .side-panel-field input::placeholder {
@@ -722,8 +711,7 @@
 }
 
 .gender-swatch-input:focus-visible + .gender-swatch {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 3px;
+  outline: none;
 }
 
 .gender-swatch-input:checked + .gender-swatch {
@@ -819,13 +807,13 @@
 .btn.primary {
   background: var(--accent);
   color: var(--cream-on-accent);
-  border-color: var(--sage-muted);
+  border-color: transparent;
   font-weight: 600;
 }
 
 .btn.primary:hover {
   background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  border-color: transparent;
   filter: none;
 }
 
@@ -994,8 +982,7 @@
 }
 
 .family-card--unknown .card-unknown-layer:focus-visible {
-  outline: 2px solid rgba(255, 255, 255, 0.65);
-  outline-offset: -2px;
+  outline: none;
 }
 
 .family-card--unknown .card-unknown-placeholder {
@@ -1018,13 +1005,13 @@
 }
 
 .family-card:focus-within {
-  border-color: rgba(91, 58, 41, 0.35);
-  box-shadow: var(--shadow-sm), 0 12px 32px rgba(0, 0, 0, 0.05), 0 0 0 2px var(--accent-soft);
+  border-color: rgba(0, 0, 0, 0.14);
+  box-shadow: var(--shadow-sm), 0 12px 32px rgba(0, 0, 0, 0.05);
 }
 
 .family-card--self:focus-within {
-  border-color: var(--sage);
-  box-shadow: var(--shadow-sm), 0 12px 36px rgba(91, 58, 41, 0.18), 0 0 0 2px rgba(91, 58, 41, 0.3);
+  border-color: rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-sm), 0 12px 36px rgba(0, 0, 0, 0.16);
 }
 
 .family-card.dragging {

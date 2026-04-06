@@ -192,6 +192,8 @@ async function fetchOpenMeteoSuggestions(q) {
 }
 
 const ROOT = __dirname;
+const DIST_DIR = path.join(ROOT, "dist");
+const CLIENT_ROOT = fs.existsSync(path.join(DIST_DIR, "index.html")) ? DIST_DIR : ROOT;
 const DATA_DIR = path.join(ROOT, "data");
 const DB_PATH = path.join(DATA_DIR, "svoi-korni.sqlite");
 
@@ -386,7 +388,14 @@ api.delete("/projects/:id", (req, res) => {
 });
 
 app.use("/api", api);
-app.use(express.static(ROOT));
+app.use(express.static(CLIENT_ROOT));
+app.get("*", (req, res, next) => {
+  if (req.path.startsWith("/api/")) {
+    next();
+    return;
+  }
+  res.sendFile(path.join(CLIENT_ROOT, "index.html"));
+});
 
 const PORT = process.env.PORT || 3456;
 app.listen(PORT, () => {
