@@ -41,7 +41,7 @@
                 <button type="button" class="card-icon-btn card-edit" @click.stop="openEdit(card.id)">
                   <img class="card-icon-img" src="/icons/edit.png" width="18" height="18" alt="" />
                 </button>
-                <button type="button" class="card-icon-btn card-remove" @click.stop="store.removeCard(card.id)">
+                <button type="button" class="card-icon-btn card-remove" @click.stop="store.requestCardDelete(card.id)">
                   <img class="card-icon-img" src="/icons/garbage.png" width="18" height="18" alt="" />
                 </button>
               </div>
@@ -107,6 +107,15 @@
         <button type="button" class="map-zoom-btn" title="Отдалить" aria-label="Отдалить" @click="zoomBy(1 / 1.15)">−</button>
       </div>
     </main>
+    <button
+      type="button"
+      class="fab-save"
+      aria-label="Сохранить проект"
+      :disabled="!store.hasUnsavedChanges || store.isSaving"
+      @click="store.saveNow()"
+    >
+      {{ store.isSaving ? "Сохранение..." : "Сохранить" }}
+    </button>
     <button type="button" class="fab-add" aria-label="Добавить карточку" @click="store.showNewCardPanel = true">Добавить</button>
     <div
       class="side-panel-backdrop"
@@ -118,7 +127,7 @@
         <h2 class="side-panel-title">Новая карточка</h2>
         <form class="side-panel-form" @submit.prevent="addCardFromDraft">
           <div class="side-panel-field"><label>ФИО</label><input v-model="store.newCardDraft.fio" type="text" /></div>
-          <div class="side-panel-field"><label>Дата рождения</label><input v-model="store.newCardDraft.birth" type="text" /></div>
+          <div class="side-panel-field"><label>Дата рождения</label><input v-model="store.newCardDraft.birth" type="date" /></div>
           <div class="side-panel-field"><label>Место рождения</label><input v-model="store.newCardDraft.birthPlace" type="text" /></div>
           <div class="side-panel-field side-panel-field--gender">
             <span class="side-panel-field-legend">Пол</span>
@@ -156,8 +165,22 @@
         <h2 class="side-panel-title">Редактирование карточки</h2>
         <form class="side-panel-form" @submit.prevent="saveEdit">
           <div class="side-panel-field"><label>ФИО</label><input v-model="store.editDraft.fio" type="text" /></div>
-          <div class="side-panel-field"><label>Дата рождения</label><input v-model="store.editDraft.birth" type="text" /></div>
-          <div class="side-panel-field"><label>Место рождения</label><input v-model="store.editDraft.birthPlace" type="text" /></div>
+          <div class="side-panel-field"><label>Дата рождения</label><input v-model="store.editDraft.birth" type="date" /></div>
+          <div class="side-panel-field">
+            <label>Место рождения</label>
+            <input v-model="store.editDraft.birthPlace" type="text" @input="onEditBirthPlaceInput" />
+            <div v-if="editPlaceSuggestions.length" class="autocomplete-dropdown">
+              <button
+                v-for="item in editPlaceSuggestions"
+                :key="item.value"
+                type="button"
+                class="autocomplete-item"
+                @click="pickEditBirthPlace(item.value)"
+              >
+                {{ item.value }}
+              </button>
+            </div>
+          </div>
           <div class="side-panel-field side-panel-field--gender">
             <span class="side-panel-field-legend">Пол</span>
             <div class="gender-pick">
@@ -188,11 +211,12 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useTreeStore } from "../state/treeStore";
 import { useViewport } from "../composables/useViewport";
 import { useCards } from "../composables/useCards";
 import { useGraph } from "../composables/useGraph";
+import { projectsApi } from "../../../shared/api/projectsApi";
 
 const store = useTreeStore();
 const { viewportRef, worldStyle, zoomBy, onWheel, onPointerDown, onPointerMove, onPointerUp, fieldCoordsFromClient } =
@@ -204,6 +228,8 @@ const { cardStyle, startDrag, onDragMove, onDragEnd, addCardFromDraft, openEdit,
 const isNewCardEmpty = computed(
   () => !store.newCardDraft.fio && !store.newCardDraft.birth && !store.newCardDraft.birthPlace
 );
+const editPlaceSuggestions = ref([]);
+let editSuggestTimer = null;
 
 function splitFioLines(fio) {
   const parts = String(fio || "").trim().split(/\s+/).filter(Boolean);
@@ -300,6 +326,23 @@ function isSelfCard(cardId) {
   return !!store.selfCard && cardId === store.selfCard.id;
 }
 
+function onEditBirthPlaceInput() {
+  if (editSuggestTimer) clearTimeout(editSuggestTimer);
+  editSuggestTimer = setTimeout(async () => {
+    const q = String(store.editDraft.birthPlace || "").trim();
+    if (q.length < 2) {
+      editPlaceSuggestions.value = [];
+      return;
+    }
+    editPlaceSuggestions.value = await projectsApi.suggestPlaces(q);
+  }, 200);
+}
+
+function pickEditBirthPlace(value) {
+  store.editDraft.birthPlace = value;
+  editPlaceSuggestions.value = [];
+}
+
 onMounted(() => {
   window.addEventListener("pointermove", onDragMove);
   window.addEventListener("pointerup", onDragEnd);
@@ -307,6 +350,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  if (editSuggestTimer) clearTimeout(editSuggestTimer);
   window.removeEventListener("pointermove", onDragMove);
   window.removeEventListener("pointerup", onDragEnd);
   window.removeEventListener("pointercancel", onDragEnd);

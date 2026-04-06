@@ -3,8 +3,34 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 export function useViewport(store) {
   const viewportRef = ref(null);
   const panState = ref(null);
+  const smoothCam = ref({ x: store.camX, y: store.camY });
+  const targetCam = ref({ x: store.camX, y: store.camY });
+  let panRaf = 0;
   const ZOOM_MIN = 0.4;
   const ZOOM_MAX = 2.5;
+  const PAN_EASING = 0.26;
+  const PAN_STOP_EPS = 0.08;
+
+  function runPanFrame() {
+    const dx = targetCam.value.x - smoothCam.value.x;
+    const dy = targetCam.value.y - smoothCam.value.y;
+    smoothCam.value.x += dx * PAN_EASING;
+    smoothCam.value.y += dy * PAN_EASING;
+    store.setViewport(smoothCam.value.x, smoothCam.value.y, store.zoom, false);
+    if (Math.abs(dx) < PAN_STOP_EPS && Math.abs(dy) < PAN_STOP_EPS) {
+      smoothCam.value.x = targetCam.value.x;
+      smoothCam.value.y = targetCam.value.y;
+      store.setViewport(smoothCam.value.x, smoothCam.value.y, store.zoom, false);
+      panRaf = 0;
+      return;
+    }
+    panRaf = requestAnimationFrame(runPanFrame);
+  }
+
+  function ensurePanRaf() {
+    if (panRaf) return;
+    panRaf = requestAnimationFrame(runPanFrame);
+  }
 
   function getTransformOffsets() {
     const viewport = viewportRef.value;
@@ -60,28 +86,45 @@ export function useViewport(store) {
   function onPointerDown(ev) {
     if (ev.target.closest(".family-card") || ev.target.closest(".map-zoom-tools")) return;
     if (ev.pointerType === "mouse" && ev.button !== 0) return;
-    panState.value = { id: ev.pointerId, lx: ev.clientX, ly: ev.clientY };
+    ev.preventDefault();
+    if (typeof ev.currentTarget?.setPointerCapture === "function") {
+      ev.currentTarget.setPointerCapture(ev.pointerId);
+    }
+    smoothCam.value = { x: store.camX, y: store.camY };
+    targetCam.value = { x: store.camX, y: store.camY };
+    panState.value = { id: ev.pointerId, lx: ev.clientX, ly: ev.clientY, moved: false };
   }
 
   function onPointerMove(ev) {
     if (!panState.value || panState.value.id !== ev.pointerId) return;
+    ev.preventDefault();
     const dx = ev.clientX - panState.value.lx;
     const dy = ev.clientY - panState.value.ly;
     panState.value.lx = ev.clientX;
     panState.value.ly = ev.clientY;
-    store.setViewport(store.camX - dx / store.zoom, store.camY - dy / store.zoom, store.zoom);
+    if (dx !== 0 || dy !== 0) panState.value.moved = true;
+    // Smooth pan: pointer updates target camera, RAF eases toward it.
+    targetCam.value = {
+      x: targetCam.value.x - dx / store.zoom,
+      y: targetCam.value.y - dy / store.zoom,
+    };
+    ensurePanRaf();
   }
 
   function onPointerUp(ev) {
     if (!panState.value || panState.value.id !== ev.pointerId) return;
+    if (typeof ev.currentTarget?.releasePointerCapture === "function") {
+      ev.currentTarget.releasePointerCapture(ev.pointerId);
+    }
     panState.value = null;
   }
 
   function updateFieldByViewport() {
     const viewport = viewportRef.value;
     if (!viewport) return;
-    const w = Math.max(320, viewport.clientWidth) * 2.4;
-    const h = Math.max(240, viewport.clientHeight) * 2.4;
+    // Keep a larger world to avoid hitting inactive gray area near edges.
+    const w = Math.max(320, viewport.clientWidth) * 3.4;
+    const h = Math.max(240, viewport.clientHeight) * 3.4;
     store.resizeFieldWithRescale(w, h);
   }
 
@@ -92,6 +135,9 @@ export function useViewport(store) {
     if (viewportRef.value) ro.observe(viewportRef.value);
   });
   onBeforeUnmount(() => ro?.disconnect());
+  onBeforeUnmount(() => {
+    if (panRaf) cancelAnimationFrame(panRaf);
+  });
 
   return {
     viewportRef,

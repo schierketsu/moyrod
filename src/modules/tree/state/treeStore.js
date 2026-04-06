@@ -4,6 +4,8 @@ import { projectsApi } from "../../../shared/api/projectsApi";
 const SELF_CARD_ID = "m_self";
 const PROFILE_KEY = "svoi_korni_profile_v1";
 const LAST_PROJECT_KEY = "svoi_korni_last_project_id";
+const CARD_W = 232;
+const CARD_H = 204;
 
 function uid() {
   return `c_${Math.random().toString(36).slice(2, 11)}`;
@@ -58,9 +60,12 @@ export const useTreeStore = defineStore("tree", {
     editingCardId: null,
     showStats: false,
     pendingLinkDeletePayload: null,
+    pendingCardDeleteId: null,
+    shareForMatching: false,
     newCardDraft: { fio: "", birth: "", birthPlace: "", gender: "", maidenName: "" },
     editDraft: { fio: "", birth: "", birthPlace: "", gender: "", maidenName: "" },
-    saveTimer: null,
+    hasUnsavedChanges: false,
+    isSaving: false,
   }),
   getters: {
     cardCount: (s) => s.cards.length,
@@ -91,7 +96,34 @@ export const useTreeStore = defineStore("tree", {
       } else {
         this.initFromProfileOnly();
       }
+      this.hasUnsavedChanges = false;
       this.ready = true;
+    },
+
+    async refreshProjects() {
+      if (!this.apiAvailable) return [];
+      this.projects = await projectsApi.listProjects();
+      return this.projects;
+    },
+
+    async createProject(name) {
+      const created = await projectsApi.createProject(name || "Мой проект");
+      await this.refreshProjects();
+      await this.openProject(created.id);
+      return created;
+    },
+
+    async deleteProject(id) {
+      await projectsApi.deleteProject(id);
+      await this.refreshProjects();
+      if (this.currentProjectId === id) {
+        if (this.projects.length > 0) await this.openProject(this.projects[0].id);
+        else {
+          const created = await projectsApi.createProject("Мой проект");
+          await this.refreshProjects();
+          await this.openProject(created.id);
+        }
+      }
     },
 
     initFromProfileOnly() {
@@ -101,8 +133,8 @@ export const useTreeStore = defineStore("tree", {
       if (profile) {
         const self = {
           id: SELF_CARD_ID,
-          x: 900,
-          y: 500,
+          x: this.fieldW / 2 - CARD_W / 2,
+          y: this.fieldH / 2 - CARD_H / 2,
           fio: profile.fio || "",
           birth: profile.birth || "",
           birthPlace: profile.birthPlace || "",
@@ -138,12 +170,13 @@ export const useTreeStore = defineStore("tree", {
         this.zoom = Number(data.zoom) || 1;
         this.cards = Array.isArray(data.cards) ? data.cards : [];
         this.links = Array.isArray(data.links) ? data.links : [];
+        this.shareForMatching = data.shareForMatching === true;
         localStorage.setItem(LAST_PROJECT_KEY, String(data.id));
         if (!this.cards.some((c) => c.id === SELF_CARD_ID) && data.profile?.fio) {
           this.cards.push({
             id: SELF_CARD_ID,
-            x: this.fieldW / 2,
-            y: this.fieldH / 2,
+            x: this.fieldW / 2 - CARD_W / 2,
+            y: this.fieldH / 2 - CARD_H / 2,
             fio: data.profile.fio || "",
             birth: data.profile.birth || "",
             birthPlace: data.profile.birthPlace || "",
@@ -164,41 +197,52 @@ export const useTreeStore = defineStore("tree", {
           this.camY = this.fieldH / 2;
           this.zoom = 1;
         }
+        this.hasUnsavedChanges = false;
       } finally {
         this.loadingProject = false;
       }
     },
 
-    setViewport(camX, camY, zoom) {
+    setViewport(camX, camY, zoom, persist = true) {
       this.camX = Math.max(0, Math.min(this.fieldW, camX));
       this.camY = Math.max(0, Math.min(this.fieldH, camY));
       this.zoom = zoom;
-      this.scheduleSave();
+      // Viewport movement does not require manual save button activation.
+      void persist;
     },
 
     setFieldSize(w, h) {
       this.fieldW = Math.max(1000, Math.round(w));
       this.fieldH = Math.max(800, Math.round(h));
-      this.scheduleSave();
     },
 
     resizeFieldWithRescale(w, h) {
       const nextW = Math.max(1000, Math.round(w));
       const nextH = Math.max(800, Math.round(h));
       if (nextW === this.fieldW && nextH === this.fieldH) return;
-      const oldW = this.fieldW || nextW;
-      const oldH = this.fieldH || nextH;
+      const oldCenterX = this.fieldW / 2 - CARD_W / 2;
+      const oldCenterY = this.fieldH / 2 - CARD_H / 2;
       const oldCamX = this.camX;
       const oldCamY = this.camY;
+      const self = this.cards.find((c) => c.id === SELF_CARD_ID);
+      const hasOnlySelf = this.cards.length === 1 && self && this.links.length === 0;
+      const selfWasCentered =
+        !!self && Math.abs(self.x - oldCenterX) < 1 && Math.abs(self.y - oldCenterY) < 1;
       this.fieldW = nextW;
       this.fieldH = nextH;
-      // Keep the camera anchored to the same relative world point on resize.
-      this.camX = (oldCamX / oldW) * nextW;
-      this.camY = (oldCamY / oldH) * nextH;
+      // Keep camera on the same world point; avoid recenter drift on overlay/layout changes.
+      this.camX = oldCamX;
+      this.camY = oldCamY;
+      // During first-run bootstrap keep the "self" card exactly at dot-grid center.
+      if (hasOnlySelf && selfWasCentered) {
+        self.x = this.fieldW / 2 - CARD_W / 2;
+        self.y = this.fieldH / 2 - CARD_H / 2;
+        this.camX = self.x + CARD_W / 2;
+        this.camY = self.y + CARD_H / 2;
+      }
       this.camX = Math.max(0, Math.min(nextW, this.camX));
       this.camY = Math.max(0, Math.min(nextH, this.camY));
 
-      this.scheduleSave();
     },
 
     addCard(payload) {
@@ -215,7 +259,7 @@ export const useTreeStore = defineStore("tree", {
         isUnknown: !!payload.isUnknown,
       };
       this.cards.push(card);
-      this.scheduleSave();
+      this.markDirty();
       return card.id;
     },
 
@@ -225,33 +269,33 @@ export const useTreeStore = defineStore("tree", {
       Object.assign(c, patch);
       c.birth = normalizeBirthInput(c.birth || "");
       if (c.gender !== "f") c.maidenName = "";
-      this.scheduleSave();
+      this.markDirty();
     },
 
     removeCard(id) {
       this.cards = this.cards.filter((c) => c.id !== id);
       this.links = this.links.filter((l) => l.from !== id && l.to !== id && l.a !== id && l.b !== id && l.child !== id);
-      this.scheduleSave();
+      this.markDirty();
     },
 
     addLineageLink(from, to) {
       if (from === to) return;
       if (this.links.some((l) => (l.kind || "lineage") === "lineage" && l.from === from && l.to === to)) return;
       this.links.push({ kind: "lineage", from, to });
-      this.scheduleSave();
+      this.markDirty();
     },
 
     addSpouseLink(a, b) {
       if (a === b) return;
       if (this.links.some((l) => l.kind === "spouse" && ((l.a === a && l.b === b) || (l.a === b && l.b === a)))) return;
       this.links.push({ kind: "spouse", a, b });
-      this.scheduleSave();
+      this.markDirty();
     },
 
     addChildOfUnionLink(a, b, child) {
       if (this.links.some((l) => l.kind === "childOfUnion" && l.a === a && l.b === b && l.child === child)) return;
       this.links.push({ kind: "childOfUnion", a, b, child });
-      this.scheduleSave();
+      this.markDirty();
     },
 
     requestLinkDelete(payload) {
@@ -260,6 +304,14 @@ export const useTreeStore = defineStore("tree", {
 
     cancelLinkDelete() {
       this.pendingLinkDeletePayload = null;
+    },
+
+    requestCardDelete(cardId) {
+      this.pendingCardDeleteId = cardId || null;
+    },
+
+    cancelCardDelete() {
+      this.pendingCardDeleteId = null;
     },
 
     confirmLinkDelete() {
@@ -277,7 +329,14 @@ export const useTreeStore = defineStore("tree", {
         );
       }
       this.pendingLinkDeletePayload = null;
-      this.scheduleSave();
+      this.markDirty();
+    },
+
+    confirmCardDelete() {
+      if (!this.pendingCardDeleteId) return;
+      const cardId = this.pendingCardDeleteId;
+      this.pendingCardDeleteId = null;
+      this.removeCard(cardId);
     },
 
     submitWelcome(form) {
@@ -288,7 +347,14 @@ export const useTreeStore = defineStore("tree", {
       saveProfile({ completed: true, fio, birth, birthPlace });
       this.showWelcome = false;
       if (!this.cards.some((c) => c.id === SELF_CARD_ID)) {
-        this.addCard({ id: SELF_CARD_ID, x: this.fieldW / 2, y: this.fieldH / 2, fio, birth, birthPlace });
+        this.addCard({
+          id: SELF_CARD_ID,
+          x: this.fieldW / 2 - CARD_W / 2,
+          y: this.fieldH / 2 - CARD_H / 2,
+          fio,
+          birth,
+          birthPlace,
+        });
       } else {
         this.patchCard(SELF_CARD_ID, { fio, birth, birthPlace, isUnknown: false });
       }
@@ -311,21 +377,35 @@ export const useTreeStore = defineStore("tree", {
         cards: this.cards,
         links: this.links,
         profile: this.selfCard
-          ? { completed: true, fio: this.selfCard.fio, birth: this.selfCard.birth, birthPlace: this.selfCard.birthPlace }
+          ? {
+              completed: true,
+              fio: this.selfCard.fio,
+              birth: this.selfCard.birth,
+              birthPlace: this.selfCard.birthPlace,
+              shareForMatching: this.shareForMatching === true,
+            }
           : null,
+        shareForMatching: this.shareForMatching === true,
       };
     },
 
-    scheduleSave() {
-      if (!this.apiAvailable || this.loadingProject || this.currentProjectId == null) return;
-      if (this.saveTimer) clearTimeout(this.saveTimer);
-      this.saveTimer = setTimeout(async () => {
-        this.saveTimer = null;
-        if (!this.apiAvailable || this.currentProjectId == null) return;
+    markDirty() {
+      this.hasUnsavedChanges = true;
+    },
+
+    async saveNow() {
+      if (!this.apiAvailable || this.loadingProject || this.currentProjectId == null) return false;
+      if (!this.hasUnsavedChanges || this.isSaving) return false;
+      this.isSaving = true;
+      try {
         const payload = this.serializeProject();
         const res = await projectsApi.saveProject(this.currentProjectId, payload);
         this.lastProjectUpdatedAt = res.updated_at || Date.now();
-      }, 650);
+        this.hasUnsavedChanges = false;
+        return true;
+      } finally {
+        this.isSaving = false;
+      }
     },
   },
 });

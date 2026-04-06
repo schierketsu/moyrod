@@ -4,6 +4,9 @@ const path = require("path");
 const fs = require("fs");
 const express = require("express");
 const Database = require("better-sqlite3");
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
+const rateLimit = require("express-rate-limit");
 
 /**
  * Подсказки населённых пунктов: Photon (OSM), запасной Open-Meteo.
@@ -196,6 +199,10 @@ const DIST_DIR = path.join(ROOT, "dist");
 const CLIENT_ROOT = fs.existsSync(path.join(DIST_DIR, "index.html")) ? DIST_DIR : ROOT;
 const DATA_DIR = path.join(ROOT, "data");
 const DB_PATH = path.join(DATA_DIR, "svoi-korni.sqlite");
+const JWT_SECRET = process.env.JWT_SECRET || "dev-insecure-jwt-secret-change-me";
+const JWT_EXPIRES_IN = "7d";
+const UID_START = 10000;
+const SYSTEM_UID = UID_START;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -219,13 +226,254 @@ db.exec(`
   );
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid INTEGER NOT NULL UNIQUE,
+    full_name TEXT NOT NULL,
+    birth_date TEXT NOT NULL,
+    birth_place TEXT NOT NULL,
+    birth_place_confirmed INTEGER NOT NULL DEFAULT 0,
+    password_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS shared_card_index (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_user_id INTEGER NOT NULL,
+    project_id INTEGER NOT NULL,
+    card_id TEXT NOT NULL,
+    fio_norm TEXT NOT NULL DEFAULT '',
+    birth_norm TEXT NOT NULL DEFAULT '',
+    birth_place_norm TEXT NOT NULL DEFAULT '',
+    gender TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+`);
+
+function hasColumn(tableName, columnName) {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  return rows.some((r) => r.name === columnName);
+}
+
+if (!hasColumn("projects", "owner_user_id")) {
+  db.exec("ALTER TABLE projects ADD COLUMN owner_user_id INTEGER;");
+}
+db.exec("CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_user_id);");
+db.exec("CREATE INDEX IF NOT EXISTS idx_cards_owner ON shared_card_index(owner_user_id);");
+db.exec("CREATE INDEX IF NOT EXISTS idx_cards_fio ON shared_card_index(fio_norm);");
+db.exec("CREATE INDEX IF NOT EXISTS idx_cards_birth ON shared_card_index(birth_norm);");
+db.exec("CREATE INDEX IF NOT EXISTS idx_cards_place ON shared_card_index(birth_place_norm);");
+
+function normalizeText(v) {
+  return String(v || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^\p{L}\p{N}\s-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function ensureSystemUserAndBackfillProjects() {
+  const now = Date.now();
+  const sys = db.prepare("SELECT id FROM users WHERE uid = ?").get(SYSTEM_UID);
+  let systemUserId = sys ? sys.id : null;
+  if (!systemUserId) {
+    const pass = bcrypt.hashSync("system-account-disabled", 10);
+    const info = db
+      .prepare(
+        `INSERT INTO users (uid, full_name, birth_date, birth_place, birth_place_confirmed, password_hash, created_at)
+         VALUES (?, ?, ?, ?, 1, ?, ?)`
+      )
+      .run(SYSTEM_UID, "System User", "1900", "System", pass, now);
+    systemUserId = Number(info.lastInsertRowid);
+  }
+  db.prepare("UPDATE projects SET owner_user_id = ? WHERE owner_user_id IS NULL").run(systemUserId);
+}
+ensureSystemUserAndBackfillProjects();
+
+function nextUid() {
+  const row = db.prepare("SELECT MAX(uid) AS max_uid FROM users").get();
+  const max = Number(row?.max_uid || UID_START - 1);
+  return Math.max(UID_START, max + 1);
+}
+
+function signToken(user) {
+  return jwt.sign({ sub: user.id, uid: user.uid }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+}
+
+function authOptional(req, _res, next) {
+  const hdr = String(req.headers.authorization || "");
+  const m = hdr.match(/^Bearer\s+(.+)$/i);
+  if (!m) {
+    req.user = null;
+    next();
+    return;
+  }
+  try {
+    const payload = jwt.verify(m[1], JWT_SECRET);
+    const user = db.prepare("SELECT id, uid, full_name, birth_date, birth_place, created_at FROM users WHERE id = ?").get(payload.sub);
+    req.user = user || null;
+  } catch {
+    req.user = null;
+  }
+  next();
+}
+
+function requireAuth(req, res, next) {
+  if (!req.user) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  next();
+}
+
+function scoreCardMatch(a, b) {
+  let score = 0;
+  if (a.birth_norm && b.birth_norm && a.birth_norm === b.birth_norm) score += 35;
+  if (a.birth_place_norm && b.birth_place_norm && a.birth_place_norm === b.birth_place_norm) score += 25;
+  if (a.gender && b.gender && a.gender === b.gender) score += 10;
+  const at = new Set(a.fio_norm.split(" ").filter(Boolean));
+  const bt = new Set(b.fio_norm.split(" ").filter(Boolean));
+  let overlap = 0;
+  for (const t of at) if (bt.has(t)) overlap += 1;
+  score += Math.min(30, overlap * 10);
+  return score;
+}
+
+function updateSharedCardIndex(ownerUserId, projectId, cards, shareForMatching) {
+  db.prepare("DELETE FROM shared_card_index WHERE owner_user_id = ? AND project_id = ?").run(ownerUserId, projectId);
+  if (shareForMatching !== true) return;
+  const now = Date.now();
+  const insert = db.prepare(
+    `INSERT INTO shared_card_index
+      (owner_user_id, project_id, card_id, fio_norm, birth_norm, birth_place_norm, gender, payload_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const card of cards || []) {
+    if (!card) continue;
+    const fio = normalizeText(card.fio || "");
+    const birth = normalizeText(card.birth || "");
+    const place = normalizeText(card.birthPlace || "");
+    if (!fio && !birth && !place) continue;
+    insert.run(
+      ownerUserId,
+      projectId,
+      String(card.id || ""),
+      fio,
+      birth,
+      place,
+      String(card.gender || ""),
+      JSON.stringify({
+        fio: String(card.fio || ""),
+        birth: String(card.birth || ""),
+        birthPlace: String(card.birthPlace || ""),
+        gender: String(card.gender || ""),
+      }),
+      now,
+      now
+    );
+  }
+}
+
 const app = express();
 app.use(express.json({ limit: "12mb" }));
+app.use(authOptional);
 
 /** Все API под префиксом /api — не пересекается со статикой из корня проекта. */
 const api = express.Router();
 
 api.get("/health", (req, res) => {
+  res.json({ ok: true });
+});
+
+const authLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+api.post("/auth/register", authLimiter, (req, res) => {
+  const b = req.body || {};
+  const fullName = String(b.fullName || "").trim();
+  const birthDate = String(b.birthDate || "").trim();
+  const birthPlace = String(b.birthPlace || "").trim();
+  const birthPlaceConfirmed = b.birthPlaceConfirmed === true;
+  const password = String(b.password || "");
+  if (!fullName || !birthDate || !birthPlace || !birthPlaceConfirmed || !password) {
+    res.status(400).json({ error: "required_fields_missing" });
+    return;
+  }
+  if (password.length < 6) {
+    res.status(400).json({ error: "password_too_short" });
+    return;
+  }
+  if (!birthPlace.includes(" - ")) {
+    res.status(400).json({ error: "birth_place_must_come_from_suggest" });
+    return;
+  }
+
+  const uid = nextUid();
+  const now = Date.now();
+  const hash = bcrypt.hashSync(password, 10);
+  try {
+    const info = db
+      .prepare(
+        `INSERT INTO users
+          (uid, full_name, birth_date, birth_place, birth_place_confirmed, password_hash, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(uid, fullName, birthDate, birthPlace, 1, hash, now);
+    const user = db
+      .prepare("SELECT id, uid, full_name, birth_date, birth_place, created_at FROM users WHERE id = ?")
+      .get(info.lastInsertRowid);
+    const token = signToken(user);
+    res.json({ token, user });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+api.post("/auth/login", authLimiter, (req, res) => {
+  const uid = Number(req.body?.uid);
+  const password = String(req.body?.password || "");
+  if (!uid || !password) {
+    res.status(400).json({ error: "uid_and_password_required" });
+    return;
+  }
+  const row = db.prepare("SELECT * FROM users WHERE uid = ?").get(uid);
+  if (!row) {
+    res.status(401).json({ error: "invalid_credentials" });
+    return;
+  }
+  const ok = bcrypt.compareSync(password, row.password_hash);
+  if (!ok) {
+    res.status(401).json({ error: "invalid_credentials" });
+    return;
+  }
+  const user = {
+    id: row.id,
+    uid: row.uid,
+    full_name: row.full_name,
+    birth_date: row.birth_date,
+    birth_place: row.birth_place,
+    created_at: row.created_at,
+  };
+  const token = signToken(user);
+  res.json({ token, user });
+});
+
+api.get("/auth/me", requireAuth, (req, res) => {
+  res.json({ user: req.user });
+});
+
+api.post("/auth/logout", requireAuth, (_req, res) => {
+  // Stateless JWT logout: client removes token.
   res.json({ ok: true });
 });
 
@@ -269,20 +517,20 @@ api.get("/places/suggest", async (req, res) => {
   }
 });
 
-api.get("/projects", (req, res) => {
+api.get("/projects", requireAuth, (req, res) => {
   try {
     const rows = db
-      .prepare("SELECT id, name, updated_at FROM projects ORDER BY updated_at DESC")
-      .all();
+      .prepare("SELECT id, name, updated_at FROM projects WHERE owner_user_id = ? ORDER BY updated_at DESC")
+      .all(req.user.id);
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: String(e.message) });
   }
 });
 
-api.get("/projects/:id", (req, res) => {
+api.get("/projects/:id", requireAuth, (req, res) => {
   const id = +req.params.id;
-  const row = db.prepare("SELECT * FROM projects WHERE id = ?").get(id);
+  const row = db.prepare("SELECT * FROM projects WHERE id = ? AND owner_user_id = ?").get(id, req.user.id);
   if (!row) {
     res.status(404).json({ error: "not found" });
     return;
@@ -317,26 +565,27 @@ api.get("/projects/:id", (req, res) => {
     camY: row.cam_y,
     zoom: row.zoom,
     profile,
+    shareForMatching: profile?.shareForMatching === true,
     cards,
     links,
   });
 });
 
-api.post("/projects", (req, res) => {
+api.post("/projects", requireAuth, (req, res) => {
   const name = String(req.body?.name ?? "Без названия").trim().slice(0, 200) || "Без названия";
   const now = Date.now();
   const info = db
     .prepare(
-      `INSERT INTO projects (name, updated_at, field_w, field_h, cam_x, cam_y, zoom, profile_json, cards_json, links_json)
-       VALUES (?, ?, 0, 0, 0, 0, 1, NULL, '[]', '[]')`
+      `INSERT INTO projects (name, updated_at, field_w, field_h, cam_x, cam_y, zoom, profile_json, cards_json, links_json, owner_user_id)
+       VALUES (?, ?, 0, 0, 0, 0, 1, NULL, '[]', '[]', ?)`
     )
-    .run(name, now);
+    .run(name, now, req.user.id);
   res.json({ id: info.lastInsertRowid, name, updated_at: now });
 });
 
-api.put("/projects/:id", (req, res) => {
+api.put("/projects/:id", requireAuth, (req, res) => {
   const id = +req.params.id;
-  const exists = db.prepare("SELECT id FROM projects WHERE id = ?").get(id);
+  const exists = db.prepare("SELECT id FROM projects WHERE id = ? AND owner_user_id = ?").get(id, req.user.id);
   if (!exists) {
     res.status(404).json({ error: "not found" });
     return;
@@ -346,8 +595,19 @@ api.put("/projects/:id", (req, res) => {
   const name = String(b.name ?? "").trim().slice(0, 200);
   const now = Date.now();
   const prevRow = db.prepare("SELECT profile_json FROM projects WHERE id = ?").get(id);
-  const profileJson =
-    b.profile !== undefined ? JSON.stringify(b.profile) : prevRow.profile_json;
+  let prevProfile = null;
+  try {
+    prevProfile = prevRow?.profile_json ? JSON.parse(prevRow.profile_json) : null;
+  } catch {
+    prevProfile = null;
+  }
+  const shareForMatching = b.shareForMatching === true;
+  const profileObj = b.profile !== undefined ? (b.profile || {}) : (prevProfile || {});
+  const nextProfile = {
+    ...(profileObj || {}),
+    shareForMatching,
+  };
+  const profileJson = JSON.stringify(nextProfile);
   const cardsJson = JSON.stringify(Array.isArray(b.cards) ? b.cards : []);
   const linksJson = JSON.stringify(Array.isArray(b.links) ? b.links : []);
 
@@ -378,13 +638,63 @@ api.put("/projects/:id", (req, res) => {
     id
   );
 
+  if (Array.isArray(b.cards)) {
+    updateSharedCardIndex(req.user.id, id, b.cards, shareForMatching);
+  }
+
   res.json({ ok: true, id, updated_at: now });
 });
 
-api.delete("/projects/:id", (req, res) => {
+api.delete("/projects/:id", requireAuth, (req, res) => {
   const id = +req.params.id;
-  db.prepare("DELETE FROM projects WHERE id = ?").run(id);
+  db.prepare("DELETE FROM projects WHERE id = ? AND owner_user_id = ?").run(id, req.user.id);
+  db.prepare("DELETE FROM shared_card_index WHERE owner_user_id = ? AND project_id = ?").run(req.user.id, id);
   res.json({ ok: true });
+});
+
+api.get("/matching/suggestions", requireAuth, (req, res) => {
+  const mine = db
+    .prepare(
+      `SELECT * FROM shared_card_index
+       WHERE owner_user_id = ?`
+    )
+    .all(req.user.id);
+  if (mine.length === 0) {
+    res.json([]);
+    return;
+  }
+  const allOthers = db
+    .prepare(
+      `SELECT * FROM shared_card_index
+       WHERE owner_user_id <> ?`
+    )
+    .all(req.user.id);
+
+  const scored = [];
+  for (const m of mine) {
+    for (const o of allOthers) {
+      if (!m.fio_norm && !m.birth_norm && !m.birth_place_norm) continue;
+      if (!o.fio_norm && !o.birth_norm && !o.birth_place_norm) continue;
+      const score = scoreCardMatch(m, o);
+      if (score < 40) continue;
+      scored.push({
+        score,
+        mine: {
+          projectId: m.project_id,
+          cardId: m.card_id,
+          ...JSON.parse(m.payload_json || "{}"),
+        },
+        other: {
+          ownerUserId: o.owner_user_id,
+          projectId: o.project_id,
+          cardId: o.card_id,
+          ...JSON.parse(o.payload_json || "{}"),
+        },
+      });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score);
+  res.json(scored.slice(0, 30));
 });
 
 app.use("/api", api);

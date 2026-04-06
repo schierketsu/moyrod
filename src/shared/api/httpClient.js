@@ -1,7 +1,21 @@
+let authToken = "";
+
+export function setAuthToken(token) {
+  authToken = String(token || "");
+}
+
+function withAuthHeaders(init) {
+  const headers = { ...(init?.headers || {}) };
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  return { ...(init || {}), headers };
+}
+
 export async function getJson(url, init) {
-  const response = await fetch(url, init);
+  const response = await fetch(url, withAuthHeaders(init));
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} for ${url}`);
+    const err = new Error(`HTTP ${response.status} for ${url}`);
+    err.status = response.status;
+    throw err;
   }
   return response.json();
 }

@@ -9,6 +9,7 @@
 
   /* Светлая зона: нейтраль + лёгкий холодный дыхание (рядом с шалфеем) */
   --bg: #ecefed;
+  --map-inactive-bg: #e8ddd0;
   --paper: #ffffff;
   --ink: #1c1c1c;
   --muted: #5f6664;
@@ -96,7 +97,7 @@
   border-radius: 16px;
   padding: 1.75rem 1.5rem;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
-  border: 1px solid var(--header-border);
+  border: none;
   color: var(--cream);
   color-scheme: dark;
 }
@@ -184,7 +185,7 @@
 .link-delete-banner {
   position: fixed;
   left: 50%;
-  top: 0.7rem;
+  top: 7rem;
   transform: translateX(-50%);
   width: min(52rem, calc(100vw - 1.5rem));
   background: rgba(42, 42, 42, 0.97);
@@ -197,7 +198,7 @@
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
   animation: link-delete-banner-in 0.22s ease-out;
   pointer-events: none;
-  z-index: 2400;
+  z-index: 1200;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -277,6 +278,14 @@
 .toolbar-inner--tripart .logo {
   justify-self: center;
   grid-column: 2;
+}
+
+.toolbar-side--left {
+  justify-self: start;
+  grid-column: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
 }
 
 .toolbar-side--right {
@@ -448,7 +457,7 @@
   border-radius: 16px;
   padding: 1.5rem 1.35rem 1.65rem;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
-  border: 1px solid var(--header-border);
+  border: none;
   color: var(--cream);
   color-scheme: dark;
 }
@@ -792,6 +801,47 @@
   transform: scale(0.98);
 }
 
+.fab-save {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 5rem;
+  z-index: 1500;
+  min-height: 3.25rem;
+  padding: 0 1.15rem;
+  margin: 0;
+  border: 1px solid rgba(91, 58, 41, 0.45);
+  border-radius: 9999px;
+  background: var(--accent);
+  color: var(--cream-on-accent);
+  font-family: var(--font-ui);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+.fab-save:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--sage-hover);
+  transform: scale(1.03);
+  box-shadow: 0 6px 24px rgba(91, 58, 41, 0.25);
+}
+
+.fab-save:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.fab-save:disabled {
+  opacity: 0.45;
+  cursor: default;
+  transform: none;
+  box-shadow: none;
+}
+
 .btn {
   font: inherit;
   cursor: pointer;
@@ -827,7 +877,7 @@
   min-height: 0;
   position: relative;
   overflow: hidden;
-  background-color: var(--bg);
+  background-color: var(--map-inactive-bg);
   touch-action: none;
 }
 
@@ -950,6 +1000,12 @@
   box-shadow: var(--shadow-sm), 0 12px 36px rgba(91, 58, 41, 0.2), 0 0 0 2px rgba(91, 58, 41, 0.22);
 }
 
+/* For the "self" card keep the top bar flush with thicker border. */
+.family-card--self .card-drag {
+  border-radius: calc(var(--radius) - var(--card-self-border))
+    calc(var(--radius) - var(--card-self-border)) 0 0;
+}
+
 /* Карточка «пока неизвестно»: сплошной оливковый, те же порты связей */
 .family-card--unknown {
   background: #808000;
@@ -1052,6 +1108,15 @@
   align-items: center;
   gap: 0.4rem;
   border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0;
+}
+
+/* Keep inner corners aligned with thicker "self" border (prevents white corner gaps). */
+.family-card.family-card--self .card-drag {
+  margin: calc(var(--card-self-border) * -1) calc(var(--card-self-border) * -1) 0;
+  width: calc(100% + (var(--card-self-border) * 2));
+  border-radius: calc(var(--radius) - var(--card-self-border))
+    calc(var(--radius) - var(--card-self-border)) 0 0;
+  background-clip: padding-box;
 }
 
 .family-card .card-icon-btn {
@@ -1162,6 +1227,10 @@
   flex: 1;
   background: var(--paper);
   border-radius: 0 0 calc(var(--radius) - 1px) calc(var(--radius) - 1px);
+}
+
+.family-card.family-card--self .card-body {
+  border-radius: 0 0 calc(var(--radius) - var(--card-self-border)) calc(var(--radius) - var(--card-self-border));
 }
 
 .family-card .card-body-content {
@@ -1480,4 +1549,149 @@
 .birth-place-suggestions-item:focus-visible {
   background: rgba(91, 58, 41, 0.22);
   outline: none;
+}
+
+.auth-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+  padding: 8px;
+  border: none;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(46, 46, 46, 0.98) 0%, rgba(34, 34, 34, 0.98) 100%);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+  animation: auth-menu-in 0.14s ease-out;
+}
+
+.auth-menu::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 22px;
+  width: 12px;
+  height: 12px;
+  transform: rotate(45deg);
+  background: #2d2d2d;
+}
+
+.auth-menu .btn {
+  width: 100%;
+  text-align: left;
+  justify-content: flex-start;
+  color: #eef1f0;
+  background: transparent;
+  border: none !important;
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.82rem;
+  transition: background 0.15s ease, transform 0.12s ease;
+}
+
+.auth-menu .btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateX(1px);
+}
+
+.auth-menu .btn:active {
+  transform: translateX(0);
+}
+
+@keyframes auth-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.autocomplete-dropdown {
+  margin-top: 6px;
+  border: 1px solid var(--border-dark);
+  border-radius: 10px;
+  background: var(--panel-dark-elevated);
+  color: var(--cream);
+  max-height: 180px;
+  overflow: auto;
+}
+
+.autocomplete-item {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.autocomplete-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.side-panel-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-dark-ui);
+  font-size: 0.8rem;
+}
+
+/* Global neutral borders: remove brown outlines/rings in UI controls */
+:root {
+  --focus-ring: rgba(120, 128, 136, 0.28);
+  --focus-border: #6b7280;
+}
+
+.btn,
+.btn.primary,
+.welcome-panel .welcome-submit,
+.toolbar .btn,
+.toolbar .btn.toolbar-project-title,
+.link-delete-banner .btn.primary {
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.btn:focus,
+.btn:focus-visible,
+.toolbar .btn:focus,
+.toolbar .btn:focus-visible,
+.welcome-submit:focus,
+.welcome-submit:focus-visible,
+input:focus,
+input:focus-visible,
+button:focus,
+button:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border-color: transparent !important;
+}
+
+.welcome-field input,
+.side-panel-field input,
+.stats-panel input,
+.auth-menu .btn,
+.autocomplete-dropdown,
+.autocomplete-item {
+  border-color: transparent !important;
+}
+
+.welcome-field input:focus,
+.side-panel-field input:focus,
+.stats-panel input:focus,
+.welcome-field input:focus-visible,
+.side-panel-field input:focus-visible,
+.stats-panel input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border-color: transparent !important;
 }

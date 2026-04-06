@@ -2,6 +2,7 @@ import { computed, ref } from "vue";
 
 export function useCards(store, viewport) {
   const drag = ref(null);
+  let dragRaf = 0;
   const editingCard = computed(() => store.cards.find((c) => c.id === store.editingCardId) || null);
   const CARD_W = 232;
   const CARD_H = 204;
@@ -65,21 +66,68 @@ export function useCards(store, viewport) {
     if (ev.button !== 0) return;
     if (ev.target.closest(".card-icon-btn")) return;
     const m = viewport.fieldCoordsFromClient(ev.clientX, ev.clientY);
-    drag.value = { id: card.id, dx: m.x - card.x, dy: m.y - card.y };
+    drag.value = {
+      id: card.id,
+      dx: m.x - card.x,
+      dy: m.y - card.y,
+      moved: false,
+      targetX: card.x,
+      targetY: card.y,
+    };
+  }
+
+  function runDragFrame() {
+    if (!drag.value) {
+      dragRaf = 0;
+      return;
+    }
+    const c = store.cards.find((x) => x.id === drag.value.id);
+    if (!c) {
+      dragRaf = 0;
+      return;
+    }
+    const tx = drag.value.targetX;
+    const ty = drag.value.targetY;
+    // Frame-synced interpolation removes micro-jitter from irregular pointermove frequency.
+    c.x += (tx - c.x) * 0.55;
+    c.y += (ty - c.y) * 0.55;
+    if (Math.abs(tx - c.x) < 0.1) c.x = tx;
+    if (Math.abs(ty - c.y) < 0.1) c.y = ty;
+    dragRaf = requestAnimationFrame(runDragFrame);
+  }
+
+  function ensureDragRaf() {
+    if (dragRaf) return;
+    dragRaf = requestAnimationFrame(runDragFrame);
   }
 
   function onDragMove(ev) {
     if (!drag.value) return;
-    const c = store.cards.find((x) => x.id === drag.value.id);
-    if (!c) return;
     const m = viewport.fieldCoordsFromClient(ev.clientX, ev.clientY);
-    const desired = clampToField(c, m.x - drag.value.dx, m.y - drag.value.dy);
-    const axis = Math.abs(desired.x - c.x) >= Math.abs(desired.y - c.y) ? "x" : "y";
-    const next = resolveNoOverlap(c.id, desired.x, desired.y, axis);
-    store.patchCard(c.id, next);
+    const desired = clampToField(null, m.x - drag.value.dx, m.y - drag.value.dy);
+    // Keep dragging smooth: defer anti-overlap correction to drag end.
+    if (desired.x !== drag.value.targetX || desired.y !== drag.value.targetY) {
+      drag.value.targetX = desired.x;
+      drag.value.targetY = desired.y;
+      drag.value.moved = true;
+      ensureDragRaf();
+    }
   }
 
   function onDragEnd() {
+    if (drag.value?.moved) {
+      const c = store.cards.find((x) => x.id === drag.value.id);
+      if (c) {
+        const next = resolveNoOverlap(c.id, c.x, c.y, "x");
+        c.x = next.x;
+        c.y = next.y;
+      }
+      store.markDirty();
+    }
+    if (dragRaf) {
+      cancelAnimationFrame(dragRaf);
+      dragRaf = 0;
+    }
     drag.value = null;
   }
 
