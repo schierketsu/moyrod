@@ -6,12 +6,20 @@ export function useViewport(store) {
   const ZOOM_MIN = 0.4;
   const ZOOM_MAX = 2.5;
 
-  const worldStyle = computed(() => {
+  function getTransformOffsets() {
     const viewport = viewportRef.value;
     const vw = viewport?.clientWidth || 1;
     const vh = viewport?.clientHeight || 1;
-    const tx = vw / 2 - store.camX * store.zoom;
-    const ty = vh / 2 - store.camY * store.zoom;
+    return {
+      vw,
+      vh,
+      tx: vw / 2 - store.camX * store.zoom,
+      ty: vh / 2 - store.camY * store.zoom,
+    };
+  }
+
+  const worldStyle = computed(() => {
+    const { tx, ty } = getTransformOffsets();
     return {
       transform: `translate(${tx}px, ${ty}px) scale(${store.zoom})`,
     };
@@ -23,10 +31,7 @@ export function useViewport(store) {
     const rect = viewport.getBoundingClientRect();
     const mx = clientX - rect.left;
     const my = clientY - rect.top;
-    const vx = viewport.clientWidth;
-    const vy = viewport.clientHeight;
-    const tx = vx / 2 - store.camX * store.zoom;
-    const ty = vy / 2 - store.camY * store.zoom;
+    const { tx, ty } = getTransformOffsets();
     return { x: (mx - tx) / store.zoom, y: (my - ty) / store.zoom };
   }
 
@@ -42,14 +47,13 @@ export function useViewport(store) {
     const rect = viewport.getBoundingClientRect();
     const mx = ev.clientX - rect.left;
     const my = ev.clientY - rect.top;
-    const vx = viewport.clientWidth;
-    const vy = viewport.clientHeight;
-    const wx = store.camX + (mx - vx / 2) / store.zoom;
-    const wy = store.camY + (my - vy / 2) / store.zoom;
+    const { vw, vh } = getTransformOffsets();
+    const wx = store.camX + (mx - vw / 2) / store.zoom;
+    const wy = store.camY + (my - vh / 2) / store.zoom;
     const factor = ev.deltaY < 0 ? 1.09 : 1 / 1.09;
     const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, store.zoom * factor));
-    const camX = wx - (mx - vx / 2) / next;
-    const camY = wy - (my - vy / 2) / next;
+    const camX = wx - (mx - vw / 2) / next;
+    const camY = wy - (my - vh / 2) / next;
     store.setViewport(camX, camY, next);
   }
 
@@ -78,7 +82,7 @@ export function useViewport(store) {
     if (!viewport) return;
     const w = Math.max(320, viewport.clientWidth) * 2.4;
     const h = Math.max(240, viewport.clientHeight) * 2.4;
-    store.setFieldSize(w, h);
+    store.resizeFieldWithRescale(w, h);
   }
 
   let ro;

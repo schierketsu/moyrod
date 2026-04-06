@@ -57,6 +57,7 @@ export const useTreeStore = defineStore("tree", {
     showEditCardPanel: false,
     editingCardId: null,
     showStats: false,
+    pendingLinkDeletePayload: null,
     newCardDraft: { fio: "", birth: "", birthPlace: "", gender: "", maidenName: "" },
     editDraft: { fio: "", birth: "", birthPlace: "", gender: "", maidenName: "" },
     saveTimer: null,
@@ -64,7 +65,7 @@ export const useTreeStore = defineStore("tree", {
   getters: {
     cardCount: (s) => s.cards.length,
     linkCount: (s) => s.links.length,
-    selfCard: (s) => s.cards.find((c) => c.id === SELF_CARD_ID) || null,
+    selfCard: (s) => s.cards.find((c) => c.id === SELF_CARD_ID) || s.cards[0] || null,
   },
   actions: {
     async bootstrap() {
@@ -98,7 +99,7 @@ export const useTreeStore = defineStore("tree", {
       this.cards = [];
       this.links = [];
       if (profile) {
-        this.cards.push({
+        const self = {
           id: SELF_CARD_ID,
           x: 900,
           y: 500,
@@ -109,9 +110,16 @@ export const useTreeStore = defineStore("tree", {
           maidenName: "",
           pinned: false,
           isUnknown: false,
-        });
+        };
+        this.cards.push(self);
+        this.camX = self.x + 116;
+        this.camY = self.y + 102;
+        this.zoom = 1;
         this.showWelcome = false;
       } else {
+        this.camX = this.fieldW / 2;
+        this.camY = this.fieldH / 2;
+        this.zoom = 1;
         this.showWelcome = true;
       }
     },
@@ -146,14 +154,24 @@ export const useTreeStore = defineStore("tree", {
           });
         }
         this.showWelcome = this.cards.length === 0;
+        const self = this.selfCard;
+        if (self) {
+          this.camX = self.x + 116;
+          this.camY = self.y + 102;
+          this.zoom = 1;
+        } else {
+          this.camX = this.fieldW / 2;
+          this.camY = this.fieldH / 2;
+          this.zoom = 1;
+        }
       } finally {
         this.loadingProject = false;
       }
     },
 
     setViewport(camX, camY, zoom) {
-      this.camX = camX;
-      this.camY = camY;
+      this.camX = Math.max(0, Math.min(this.fieldW, camX));
+      this.camY = Math.max(0, Math.min(this.fieldH, camY));
       this.zoom = zoom;
       this.scheduleSave();
     },
@@ -161,6 +179,25 @@ export const useTreeStore = defineStore("tree", {
     setFieldSize(w, h) {
       this.fieldW = Math.max(1000, Math.round(w));
       this.fieldH = Math.max(800, Math.round(h));
+      this.scheduleSave();
+    },
+
+    resizeFieldWithRescale(w, h) {
+      const nextW = Math.max(1000, Math.round(w));
+      const nextH = Math.max(800, Math.round(h));
+      if (nextW === this.fieldW && nextH === this.fieldH) return;
+      const oldW = this.fieldW || nextW;
+      const oldH = this.fieldH || nextH;
+      const oldCamX = this.camX;
+      const oldCamY = this.camY;
+      this.fieldW = nextW;
+      this.fieldH = nextH;
+      // Keep the camera anchored to the same relative world point on resize.
+      this.camX = (oldCamX / oldW) * nextW;
+      this.camY = (oldCamY / oldH) * nextH;
+      this.camX = Math.max(0, Math.min(nextW, this.camX));
+      this.camY = Math.max(0, Math.min(nextH, this.camY));
+
       this.scheduleSave();
     },
 
@@ -217,6 +254,32 @@ export const useTreeStore = defineStore("tree", {
       this.scheduleSave();
     },
 
+    requestLinkDelete(payload) {
+      this.pendingLinkDeletePayload = payload || null;
+    },
+
+    cancelLinkDelete() {
+      this.pendingLinkDeletePayload = null;
+    },
+
+    confirmLinkDelete() {
+      const p = this.pendingLinkDeletePayload;
+      if (!p || !p.kind) return;
+      if (p.kind === "lineage") {
+        this.links = this.links.filter((l) => !((l.kind || "lineage") === "lineage" && l.from === p.from && l.to === p.to));
+      } else if (p.kind === "spouse") {
+        this.links = this.links.filter(
+          (l) => !(l.kind === "spouse" && ((l.a === p.a && l.b === p.b) || (l.a === p.b && l.b === p.a)))
+        );
+      } else if (p.kind === "childOfUnion") {
+        this.links = this.links.filter(
+          (l) => !(l.kind === "childOfUnion" && l.a === p.a && l.b === p.b && l.child === p.child)
+        );
+      }
+      this.pendingLinkDeletePayload = null;
+      this.scheduleSave();
+    },
+
     submitWelcome(form) {
       const fio = String(form.fio || "").trim();
       if (!fio) return;
@@ -228,6 +291,12 @@ export const useTreeStore = defineStore("tree", {
         this.addCard({ id: SELF_CARD_ID, x: this.fieldW / 2, y: this.fieldH / 2, fio, birth, birthPlace });
       } else {
         this.patchCard(SELF_CARD_ID, { fio, birth, birthPlace, isUnknown: false });
+      }
+      const self = this.cards.find((c) => c.id === SELF_CARD_ID);
+      if (self) {
+        this.camX = self.x + 116;
+        this.camY = self.y + 102;
+        this.zoom = 1;
       }
     },
 

@@ -6,6 +6,29 @@ function center(card) {
 
 export function useGraph(store) {
   const pendingPort = ref(null);
+  const pendingUnion = ref(null);
+
+  const unionNodes = computed(() => {
+    const byId = new Map(store.cards.map((c) => [c.id, c]));
+    const unions = [];
+    for (const link of store.links) {
+      if (link.kind !== "spouse") continue;
+      const a = byId.get(link.a);
+      const b = byId.get(link.b);
+      if (!a || !b) continue;
+      const ca = center(a);
+      const cb = center(b);
+      const key = [link.a, link.b].sort().join("|");
+      unions.push({
+        key,
+        a: link.a,
+        b: link.b,
+        x: (ca.x + cb.x) / 2,
+        y: (ca.y + cb.y) / 2,
+      });
+    }
+    return unions;
+  });
 
   const linksPath = computed(() => {
     const byId = new Map(store.cards.map((c) => [c.id, c]));
@@ -18,14 +41,25 @@ export function useGraph(store) {
         if (!from || !to) continue;
         const a = { x: from.x + 116, y: from.y + 204 };
         const b = { x: to.x + 116, y: to.y };
-        out.push({ key: `${kind}:${link.from}:${link.to}`, d: `M ${a.x} ${a.y} L ${b.x} ${b.y}` });
+        const cy = a.y + (b.y - a.y) * 0.48;
+        out.push({
+          key: `${kind}:${link.from}:${link.to}`,
+          d: `M ${a.x} ${a.y} C ${a.x} ${cy}, ${b.x} ${cy}, ${b.x} ${b.y}`,
+          className: "lines-layer-path",
+          payload: { kind: "lineage", from: link.from, to: link.to },
+        });
       } else if (kind === "spouse") {
         const a = byId.get(link.a);
         const b = byId.get(link.b);
         if (!a || !b) continue;
         const ca = center(a);
         const cb = center(b);
-        out.push({ key: `${kind}:${link.a}:${link.b}`, d: `M ${ca.x} ${ca.y} L ${cb.x} ${cb.y}` });
+        out.push({
+          key: `${kind}:${link.a}:${link.b}`,
+          d: `M ${ca.x} ${ca.y} L ${cb.x} ${cb.y}`,
+          className: "lines-layer-path lines-layer-path--spouse",
+          payload: { kind: "spouse", a: link.a, b: link.b },
+        });
       } else if (kind === "childOfUnion") {
         const a = byId.get(link.a);
         const b = byId.get(link.b);
@@ -35,13 +69,27 @@ export function useGraph(store) {
         const cb = center(b);
         const union = { x: (ca.x + cb.x) / 2, y: (ca.y + cb.y) / 2 };
         const top = { x: child.x + 116, y: child.y };
-        out.push({ key: `${kind}:${link.a}:${link.b}:${link.child}`, d: `M ${union.x} ${union.y} L ${top.x} ${top.y}` });
+        const cy = union.y + (top.y - union.y) * 0.52;
+        out.push({
+          key: `${kind}:${link.a}:${link.b}:${link.child}`,
+          d: `M ${union.x} ${union.y} C ${union.x} ${cy}, ${top.x} ${cy}, ${top.x} ${top.y}`,
+          className: "lines-layer-path",
+          payload: { kind: "childOfUnion", a: link.a, b: link.b, child: link.child },
+        });
       }
     }
     return out;
   });
 
   function portDown(cardId, port) {
+    if (pendingUnion.value) {
+      const u = pendingUnion.value;
+      pendingUnion.value = null;
+      if (port === "top" && cardId !== u.a && cardId !== u.b) {
+        store.addChildOfUnionLink(u.a, u.b, cardId);
+      }
+      return;
+    }
     if (!pendingPort.value) {
       pendingPort.value = { cardId, port };
       return;
@@ -53,15 +101,18 @@ export function useGraph(store) {
       store.addSpouseLink(first.cardId, cardId);
       return;
     }
-    if (first.port === "bottom" && port === "top") {
+    if (first.port === "top" && port === "top") {
       store.addLineageLink(first.cardId, cardId);
       return;
     }
-    if (first.port === "top" && port === "bottom") {
-      store.addLineageLink(cardId, first.cardId);
-    }
   }
 
-  return { linksPath, pendingPort, portDown };
+  function armUnion(a, b) {
+    const same = pendingUnion.value && pendingUnion.value.a === a && pendingUnion.value.b === b;
+    pendingUnion.value = same ? null : { a, b };
+    pendingPort.value = null;
+  }
+
+  return { linksPath, unionNodes, pendingPort, pendingUnion, portDown, armUnion };
 }
 

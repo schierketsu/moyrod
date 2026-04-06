@@ -3,18 +3,61 @@ import { computed, ref } from "vue";
 export function useCards(store, viewport) {
   const drag = ref(null);
   const editingCard = computed(() => store.cards.find((c) => c.id === store.editingCardId) || null);
+  const CARD_W = 232;
+  const CARD_H = 204;
+  const GAP = 14;
+
+  function blurActiveIfInside(selector) {
+    const active = document.activeElement;
+    if (active && typeof active.closest === "function" && active.closest(selector)) {
+      active.blur();
+    }
+  }
 
   function cardStyle(card) {
     return { left: `${card.x}px`, top: `${card.y}px` };
   }
 
-  function clampToField(card, nx, ny) {
-    const w = 232;
-    const h = 204;
+  function clampToField(_card, nx, ny) {
     return {
-      x: Math.max(0, Math.min(store.fieldW - w, nx)),
-      y: Math.max(0, Math.min(store.fieldH - h, ny)),
+      x: Math.max(0, Math.min(store.fieldW - CARD_W, nx)),
+      y: Math.max(0, Math.min(store.fieldH - CARD_H, ny)),
     };
+  }
+
+  function overlaps(ax, ay, bx, by) {
+    return (
+      ax < bx + CARD_W + GAP &&
+      ax + CARD_W + GAP > bx &&
+      ay < by + CARD_H + GAP &&
+      ay + CARD_H + GAP > by
+    );
+  }
+
+  function resolveNoOverlap(id, x, y, axisHint = "x") {
+    let rx = x;
+    let ry = y;
+    for (let i = 0; i < 16; i += 1) {
+      let hit = null;
+      for (const other of store.cards) {
+        if (other.id === id) continue;
+        if (overlaps(rx, ry, other.x, other.y)) {
+          hit = other;
+          break;
+        }
+      }
+      if (!hit) break;
+      if (axisHint === "y") {
+        ry = ry < hit.y ? hit.y - CARD_H - GAP : hit.y + CARD_H + GAP;
+      } else {
+        rx = rx < hit.x ? hit.x - CARD_W - GAP : hit.x + CARD_W + GAP;
+      }
+      const clamped = clampToField(null, rx, ry);
+      rx = clamped.x;
+      ry = clamped.y;
+      axisHint = axisHint === "x" ? "y" : "x";
+    }
+    return { x: rx, y: ry };
   }
 
   function startDrag(ev, card) {
@@ -30,7 +73,9 @@ export function useCards(store, viewport) {
     const c = store.cards.find((x) => x.id === drag.value.id);
     if (!c) return;
     const m = viewport.fieldCoordsFromClient(ev.clientX, ev.clientY);
-    const next = clampToField(c, m.x - drag.value.dx, m.y - drag.value.dy);
+    const desired = clampToField(c, m.x - drag.value.dx, m.y - drag.value.dy);
+    const axis = Math.abs(desired.x - c.x) >= Math.abs(desired.y - c.y) ? "x" : "y";
+    const next = resolveNoOverlap(c.id, desired.x, desired.y, axis);
     store.patchCard(c.id, next);
   }
 
@@ -41,9 +86,11 @@ export function useCards(store, viewport) {
   function addCardFromDraft() {
     const d = store.newCardDraft;
     const isUnknown = !d.fio && !d.birth && !d.birthPlace;
+    const desired = clampToField(null, store.camX - 116, store.camY - 102);
+    const resolved = resolveNoOverlap("", desired.x, desired.y, "x");
     store.addCard({
-      x: store.camX - 116,
-      y: store.camY - 102,
+      x: resolved.x,
+      y: resolved.y,
       fio: d.fio,
       birth: d.birth,
       birthPlace: d.birthPlace,
@@ -52,6 +99,11 @@ export function useCards(store, viewport) {
       isUnknown,
     });
     store.newCardDraft = { fio: "", birth: "", birthPlace: "", gender: "", maidenName: "" };
+    store.showNewCardPanel = false;
+  }
+
+  function closeNewPanel() {
+    blurActiveIfInside(".side-panel");
     store.showNewCardPanel = false;
   }
 
@@ -85,6 +137,12 @@ export function useCards(store, viewport) {
     store.editingCardId = null;
   }
 
+  function closeEditPanel() {
+    blurActiveIfInside(".side-panel");
+    store.showEditCardPanel = false;
+    store.editingCardId = null;
+  }
+
   return {
     editingCard,
     cardStyle,
@@ -94,6 +152,8 @@ export function useCards(store, viewport) {
     addCardFromDraft,
     openEdit,
     saveEdit,
+    closeNewPanel,
+    closeEditPanel,
   };
 }
 

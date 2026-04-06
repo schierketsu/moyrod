@@ -3,7 +3,7 @@
   --charcoal: #212121;
   --sage: #5b3a29;
   --sage-hover: #4a2f22;
-  --sage-muted: #4b4b4b;
+  --sage-muted: #3b2419;
   --brown: #563500;
   --olive: #5b3a29;
 
@@ -23,7 +23,7 @@
   /* Шапка: плоский фон */
   --header-bg: #5b3a29;
   --header-bg-solid: #5b3a29;
-  --header-border: #454545;
+  --header-border: #3f281c;
   --header-text: #141a18;
   --header-text-muted: #2d3d38;
 
@@ -37,8 +37,8 @@
   --accent: var(--sage);
   --accent-hover: var(--sage-hover);
   --accent-soft: rgba(91, 58, 41, 0.18);
-  --focus-ring: rgba(0, 0, 0, 0);
-  --focus-border: #6a6a6a;
+  --focus-ring: rgba(91, 58, 41, 0.35);
+  --focus-border: var(--sage);
 
   /* Линии родства */
   --line: var(--sage);
@@ -50,7 +50,7 @@
   --card-w: 232px;
   /* Минимум карточки + высота «пустых» до замера эталона */
   --card-min-h: 204px;
-  --card-self-border: 2px;
+  --card-self-border: 3px;
   --font-ui: "JetBrains Mono", ui-monospace, monospace;
   --font-display: "Polonium", "JetBrains Mono", ui-sans-serif, system-ui, sans-serif;
 }
@@ -161,12 +161,12 @@
   font-weight: 600;
   background: var(--accent);
   color: var(--cream-on-accent);
-  border: 1px solid transparent;
+  border: 1px solid var(--sage-muted);
 }
 
 .welcome-panel .welcome-submit:hover {
   background: var(--accent-hover);
-  border-color: transparent;
+  border-color: var(--accent-hover);
   filter: none;
 }
 
@@ -182,20 +182,22 @@
 
 /* Под шапкой, вне потока — карта не прыгает при появлении */
 .link-delete-banner {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 100%;
+  position: fixed;
+  left: 50%;
+  top: 0.7rem;
+  transform: translateX(-50%);
+  width: min(52rem, calc(100vw - 1.5rem));
   background: rgba(42, 42, 42, 0.97);
   color: var(--cream);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--border-dark);
-  border-top: none;
-  border-radius: 0 0 14px 14px;
+  border-radius: 14px;
   padding: 0.7rem 1rem 0.8rem;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
   animation: link-delete-banner-in 0.22s ease-out;
+  pointer-events: none;
+  z-index: 2400;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -216,13 +218,14 @@
 }
 
 .link-delete-banner-inner {
-  max-width: 52rem;
-  margin: 0 auto;
+  max-width: 100%;
+  margin: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+  pointer-events: auto;
 }
 
 .link-delete-banner-text {
@@ -569,12 +572,14 @@
   background: rgba(0, 0, 0, 0.35);
   opacity: 0;
   visibility: hidden;
+  pointer-events: none;
   transition: opacity 0.25s ease, visibility 0.25s ease;
 }
 
 .side-panel-backdrop.is-open {
   opacity: 1;
   visibility: visible;
+  pointer-events: auto;
 }
 
 .side-panel {
@@ -807,13 +812,13 @@
 .btn.primary {
   background: var(--accent);
   color: var(--cream-on-accent);
-  border-color: transparent;
+  border-color: var(--sage-muted);
   font-weight: 600;
 }
 
 .btn.primary:hover {
   background: var(--accent-hover);
-  border-color: transparent;
+  border-color: var(--accent-hover);
   filter: none;
 }
 
@@ -942,7 +947,7 @@
 .family-card--self {
   border-width: var(--card-self-border);
   border-color: var(--sage);
-  box-shadow: var(--shadow-sm), 0 12px 36px rgba(91, 58, 41, 0.15);
+  box-shadow: var(--shadow-sm), 0 12px 36px rgba(91, 58, 41, 0.2), 0 0 0 2px rgba(91, 58, 41, 0.22);
 }
 
 /* Карточка «пока неизвестно»: сплошной оливковый, те же порты связей */
@@ -1375,6 +1380,11 @@
 
 .card-port--top {
   top: 0;
+  transform: translate(-50%, -50%);
+}
+
+.card-port--bottom {
+  top: 100%;
   transform: translate(-50%, -50%);
 }
 

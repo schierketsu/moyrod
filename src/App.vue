@@ -7,9 +7,13 @@
   </div>
 
   <template v-else>
+    <div class="app-main">
     <div v-if="tree.showWelcome" class="welcome-overlay">
       <div class="welcome-panel">
         <h2 class="welcome-title">Добро пожаловать в «Свои корни»</h2>
+        <p class="welcome-text">
+          Здесь можно собирать родословную на поле: карточки людей и связи между ними. Начните с себя — укажите ваши данные.
+        </p>
         <form class="welcome-form" @submit.prevent="tree.submitWelcome(welcome)">
           <div class="welcome-field">
             <label>ФИО</label>
@@ -40,9 +44,26 @@
           </div>
         </div>
       </div>
+      <div
+        v-if="tree.pendingLinkDeletePayload"
+        class="link-delete-banner"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="link-delete-banner-title"
+      >
+        <div class="link-delete-banner-inner">
+          <p id="link-delete-banner-title" class="link-delete-banner-text">
+            {{ linkDeleteBannerText }}
+          </p>
+          <div class="link-delete-banner-actions">
+            <button type="button" class="btn link-delete-banner-cancel" @click="tree.cancelLinkDelete()">Отмена</button>
+            <button type="button" class="btn primary link-delete-banner-confirm" @click="tree.confirmLinkDelete()">Удалить связь</button>
+          </div>
+        </div>
+      </div>
     </header>
 
-    <TreeWorkspace />
+    <TreeWorkspace class="app-tree" />
 
     <div v-if="tree.showStats" class="stats-overlay" @click.self="tree.showStats = false">
       <div class="stats-panel" role="dialog" aria-modal="true">
@@ -57,6 +78,7 @@
           <input v-model="tree.currentProjectName" type="text" maxlength="200" />
         </div>
       </div>
+    </div>
     </div>
   </template>
 </template>
@@ -73,9 +95,35 @@ void tree.bootstrap();
 const formattedSavedAt = computed(() =>
   tree.lastProjectUpdatedAt ? new Date(tree.lastProjectUpdatedAt).toLocaleString("ru-RU") : "—"
 );
+const linkDeleteBannerText = computed(() => {
+  const p = tree.pendingLinkDeletePayload;
+  if (!p) return "";
+  if (p.kind === "spouse") return "Удалить связь пары?";
+  if (p.kind === "childOfUnion") return "Удалить связь ребенка с союзом?";
+  return "Удалить родительскую связь?";
+});
 
 watch(
   () => tree.currentProjectName,
   () => tree.scheduleSave()
 );
 </script>
+
+<style>
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-main {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+</style>
