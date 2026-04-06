@@ -62,8 +62,26 @@ export const useTreeStore = defineStore("tree", {
     pendingLinkDeletePayload: null,
     pendingCardDeleteId: null,
     shareForMatching: false,
-    newCardDraft: { fio: "", birth: "", birthPlace: "", gender: "", maidenName: "" },
-    editDraft: { fio: "", birth: "", birthPlace: "", gender: "", maidenName: "" },
+    newCardDraft: {
+      fio: "",
+      birth: "",
+      birthPlace: "",
+      gender: "",
+      maidenName: "",
+      uncertainFio: false,
+      uncertainBirth: false,
+      uncertainBirthPlace: false,
+    },
+    editDraft: {
+      fio: "",
+      birth: "",
+      birthPlace: "",
+      gender: "",
+      maidenName: "",
+      uncertainFio: false,
+      uncertainBirth: false,
+      uncertainBirthPlace: false,
+    },
     hasUnsavedChanges: false,
     isSaving: false,
   }),
@@ -85,14 +103,14 @@ export const useTreeStore = defineStore("tree", {
       if (this.apiAvailable) {
         this.projects = await projectsApi.listProjects();
         if (this.projects.length === 0) {
-          const created = await projectsApi.createProject("Мой проект");
-          this.projects = [created];
+          this.clearProjectSession();
+        } else {
+          const wanted = localStorage.getItem(LAST_PROJECT_KEY);
+          const pick = wanted && this.projects.some((p) => String(p.id) === wanted)
+            ? Number(wanted)
+            : this.projects[0].id;
+          await this.openProject(pick);
         }
-        const wanted = localStorage.getItem(LAST_PROJECT_KEY);
-        const pick = wanted && this.projects.some((p) => String(p.id) === wanted)
-          ? Number(wanted)
-          : this.projects[0].id;
-        await this.openProject(pick);
       } else {
         this.initFromProfileOnly();
       }
@@ -113,17 +131,41 @@ export const useTreeStore = defineStore("tree", {
       return created;
     },
 
+    clearProjectSession() {
+      this.currentProjectId = null;
+      this.currentProjectName = "";
+      this.lastProjectUpdatedAt = null;
+      this.cards = [];
+      this.links = [];
+      this.camX = this.fieldW / 2;
+      this.camY = this.fieldH / 2;
+      this.zoom = 1;
+      this.showWelcome = false;
+      this.shareForMatching = false;
+      this.hasUnsavedChanges = false;
+      this.pendingLinkDeletePayload = null;
+      this.pendingCardDeleteId = null;
+      try {
+        localStorage.removeItem(LAST_PROJECT_KEY);
+      } catch {
+        /* ignore */
+      }
+    },
+
     async deleteProject(id) {
       await projectsApi.deleteProject(id);
       await this.refreshProjects();
       if (this.currentProjectId === id) {
         if (this.projects.length > 0) await this.openProject(this.projects[0].id);
-        else {
-          const created = await projectsApi.createProject("Мой проект");
-          await this.refreshProjects();
-          await this.openProject(created.id);
-        }
+        else this.clearProjectSession();
       }
+    },
+
+    async renameProject(id, name) {
+      const cleanName = String(name || "").trim().slice(0, 200) || "Без названия";
+      await projectsApi.renameProject(id, cleanName);
+      if (this.currentProjectId === id) this.currentProjectName = cleanName;
+      await this.refreshProjects();
     },
 
     initFromProfileOnly() {
@@ -255,6 +297,9 @@ export const useTreeStore = defineStore("tree", {
         birthPlace: payload.birthPlace || "",
         gender: payload.gender || "",
         maidenName: payload.gender === "f" ? (payload.maidenName || "") : "",
+        uncertainFio: payload.uncertainFio === true,
+        uncertainBirth: payload.uncertainBirth === true,
+        uncertainBirthPlace: payload.uncertainBirthPlace === true,
         pinned: !!payload.pinned,
         isUnknown: !!payload.isUnknown,
       };

@@ -11,16 +11,43 @@ export function useViewport(store) {
   const PAN_EASING = 0.26;
   const PAN_STOP_EPS = 0.08;
 
+  function clampCamera(camX, camY, zoom = store.zoom) {
+    const viewport = viewportRef.value;
+    const vw = viewport?.clientWidth || 1;
+    const vh = viewport?.clientHeight || 1;
+    const halfW = vw / (2 * zoom);
+    const halfH = vh / (2 * zoom);
+
+    let minX = halfW;
+    let maxX = store.fieldW - halfW;
+    let minY = halfH;
+    let maxY = store.fieldH - halfH;
+
+    if (minX > maxX) minX = maxX = store.fieldW / 2;
+    if (minY > maxY) minY = maxY = store.fieldH / 2;
+
+    return {
+      x: Math.max(minX, Math.min(maxX, camX)),
+      y: Math.max(minY, Math.min(maxY, camY)),
+    };
+  }
+
   function runPanFrame() {
     const dx = targetCam.value.x - smoothCam.value.x;
     const dy = targetCam.value.y - smoothCam.value.y;
     smoothCam.value.x += dx * PAN_EASING;
     smoothCam.value.y += dy * PAN_EASING;
-    store.setViewport(smoothCam.value.x, smoothCam.value.y, store.zoom, false);
+    const clamped = clampCamera(smoothCam.value.x, smoothCam.value.y, store.zoom);
+    smoothCam.value.x = clamped.x;
+    smoothCam.value.y = clamped.y;
+    store.setViewport(clamped.x, clamped.y, store.zoom, false);
     if (Math.abs(dx) < PAN_STOP_EPS && Math.abs(dy) < PAN_STOP_EPS) {
       smoothCam.value.x = targetCam.value.x;
       smoothCam.value.y = targetCam.value.y;
-      store.setViewport(smoothCam.value.x, smoothCam.value.y, store.zoom, false);
+      const finalClamped = clampCamera(smoothCam.value.x, smoothCam.value.y, store.zoom);
+      smoothCam.value.x = finalClamped.x;
+      smoothCam.value.y = finalClamped.y;
+      store.setViewport(finalClamped.x, finalClamped.y, store.zoom, false);
       panRaf = 0;
       return;
     }
@@ -63,7 +90,8 @@ export function useViewport(store) {
 
   function zoomBy(factor) {
     const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, store.zoom * factor));
-    store.setViewport(store.camX, store.camY, next);
+    const clamped = clampCamera(store.camX, store.camY, next);
+    store.setViewport(clamped.x, clamped.y, next);
   }
 
   function onWheel(ev) {
@@ -80,7 +108,8 @@ export function useViewport(store) {
     const next = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, store.zoom * factor));
     const camX = wx - (mx - vw / 2) / next;
     const camY = wy - (my - vh / 2) / next;
-    store.setViewport(camX, camY, next);
+    const clamped = clampCamera(camX, camY, next);
+    store.setViewport(clamped.x, clamped.y, next);
   }
 
   function onPointerDown(ev) {
@@ -104,10 +133,11 @@ export function useViewport(store) {
     panState.value.ly = ev.clientY;
     if (dx !== 0 || dy !== 0) panState.value.moved = true;
     // Smooth pan: pointer updates target camera, RAF eases toward it.
-    targetCam.value = {
+    const nextTarget = {
       x: targetCam.value.x - dx / store.zoom,
       y: targetCam.value.y - dy / store.zoom,
     };
+    targetCam.value = clampCamera(nextTarget.x, nextTarget.y, store.zoom);
     ensurePanRaf();
   }
 
@@ -123,9 +153,11 @@ export function useViewport(store) {
     const viewport = viewportRef.value;
     if (!viewport) return;
     // Keep a larger world to avoid hitting inactive gray area near edges.
-    const w = Math.max(320, viewport.clientWidth) * 3.4;
-    const h = Math.max(240, viewport.clientHeight) * 3.4;
+    const w = Math.max(320, viewport.clientWidth) * 8;
+    const h = Math.max(240, viewport.clientHeight) * 8;
     store.resizeFieldWithRescale(w, h);
+    const clamped = clampCamera(store.camX, store.camY, store.zoom);
+    store.setViewport(clamped.x, clamped.y, store.zoom, false);
   }
 
   let ro;

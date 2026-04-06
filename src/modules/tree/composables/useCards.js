@@ -2,11 +2,14 @@ import { computed, ref } from "vue";
 
 export function useCards(store, viewport) {
   const drag = ref(null);
-  let dragRaf = 0;
   const editingCard = computed(() => store.cards.find((c) => c.id === store.editingCardId) || null);
   const CARD_W = 232;
+  /** Совпадает с визуальной высотой карточки (--card-min-h), без лишнего «запаса». */
   const CARD_H = 204;
-  const GAP = 14;
+  /** Зазор при отпускании — карточки не наезжают друг на друга. */
+  const GAP_RELEASE = 14;
+  /** Во время перетаскивания — меньше, чтобы не «цеплялось» за соседей. */
+  const GAP_DRAG = 6;
 
   function blurActiveIfInside(selector) {
     const active = document.activeElement;
@@ -26,32 +29,32 @@ export function useCards(store, viewport) {
     };
   }
 
-  function overlaps(ax, ay, bx, by) {
+  function overlaps(ax, ay, bx, by, gap) {
     return (
-      ax < bx + CARD_W + GAP &&
-      ax + CARD_W + GAP > bx &&
-      ay < by + CARD_H + GAP &&
-      ay + CARD_H + GAP > by
+      ax < bx + CARD_W + gap &&
+      ax + CARD_W + gap > bx &&
+      ay < by + CARD_H + gap &&
+      ay + CARD_H + gap > by
     );
   }
 
-  function resolveNoOverlap(id, x, y, axisHint = "x") {
+  function resolveNoOverlap(id, x, y, axisHint, gap) {
     let rx = x;
     let ry = y;
-    for (let i = 0; i < 16; i += 1) {
+    for (let i = 0; i < 20; i += 1) {
       let hit = null;
       for (const other of store.cards) {
         if (other.id === id) continue;
-        if (overlaps(rx, ry, other.x, other.y)) {
+        if (overlaps(rx, ry, other.x, other.y, gap)) {
           hit = other;
           break;
         }
       }
       if (!hit) break;
       if (axisHint === "y") {
-        ry = ry < hit.y ? hit.y - CARD_H - GAP : hit.y + CARD_H + GAP;
+        ry = ry < hit.y ? hit.y - CARD_H - gap : hit.y + CARD_H + gap;
       } else {
-        rx = rx < hit.x ? hit.x - CARD_W - GAP : hit.x + CARD_W + GAP;
+        rx = rx < hit.x ? hit.x - CARD_W - gap : hit.x + CARD_W + gap;
       }
       const clamped = clampToField(null, rx, ry);
       rx = clamped.x;
@@ -66,67 +69,64 @@ export function useCards(store, viewport) {
     if (ev.button !== 0) return;
     if (ev.target.closest(".card-icon-btn")) return;
     const m = viewport.fieldCoordsFromClient(ev.clientX, ev.clientY);
+    const el = ev.currentTarget;
+    if (el && typeof el.setPointerCapture === "function") {
+      try {
+        el.setPointerCapture(ev.pointerId);
+      } catch {
+        /* ignore */
+      }
+    }
     drag.value = {
       id: card.id,
       dx: m.x - card.x,
       dy: m.y - card.y,
-      moved: false,
-      targetX: card.x,
-      targetY: card.y,
+      startX: card.x,
+      startY: card.y,
+      pointerId: ev.pointerId,
     };
   }
 
-  function runDragFrame() {
-    if (!drag.value) {
-      dragRaf = 0;
-      return;
+  function releasePointerCaptureIfNeeded() {
+    const d = drag.value;
+    if (!d || d.pointerId == null) return;
+    const article = document.getElementById(d.id);
+    const handle = article?.querySelector?.(".card-drag");
+    if (handle && typeof handle.releasePointerCapture === "function") {
+      try {
+        handle.releasePointerCapture(d.pointerId);
+      } catch {
+        /* ignore */
+      }
     }
-    const c = store.cards.find((x) => x.id === drag.value.id);
-    if (!c) {
-      dragRaf = 0;
-      return;
-    }
-    const tx = drag.value.targetX;
-    const ty = drag.value.targetY;
-    // Frame-synced interpolation removes micro-jitter from irregular pointermove frequency.
-    c.x += (tx - c.x) * 0.55;
-    c.y += (ty - c.y) * 0.55;
-    if (Math.abs(tx - c.x) < 0.1) c.x = tx;
-    if (Math.abs(ty - c.y) < 0.1) c.y = ty;
-    dragRaf = requestAnimationFrame(runDragFrame);
-  }
-
-  function ensureDragRaf() {
-    if (dragRaf) return;
-    dragRaf = requestAnimationFrame(runDragFrame);
   }
 
   function onDragMove(ev) {
     if (!drag.value) return;
+    const c = store.cards.find((x) => x.id === drag.value.id);
+    if (!c) return;
+
     const m = viewport.fieldCoordsFromClient(ev.clientX, ev.clientY);
     const desired = clampToField(null, m.x - drag.value.dx, m.y - drag.value.dy);
-    // Keep dragging smooth: defer anti-overlap correction to drag end.
-    if (desired.x !== drag.value.targetX || desired.y !== drag.value.targetY) {
-      drag.value.targetX = desired.x;
-      drag.value.targetY = desired.y;
-      drag.value.moved = true;
-      ensureDragRaf();
-    }
+    const axis = Math.abs(desired.x - c.x) >= Math.abs(desired.y - c.y) ? "x" : "y";
+    const safe = resolveNoOverlap(drag.value.id, desired.x, desired.y, axis, GAP_DRAG);
+
+    c.x = safe.x;
+    c.y = safe.y;
   }
 
   function onDragEnd() {
-    if (drag.value?.moved) {
-      const c = store.cards.find((x) => x.id === drag.value.id);
+    releasePointerCaptureIfNeeded();
+    const d = drag.value;
+    if (d) {
+      const c = store.cards.find((x) => x.id === d.id);
       if (c) {
-        const next = resolveNoOverlap(c.id, c.x, c.y, "x");
+        const next = resolveNoOverlap(c.id, c.x, c.y, "x", GAP_RELEASE);
         c.x = next.x;
         c.y = next.y;
+        const shifted = c.x !== d.startX || c.y !== d.startY;
+        if (shifted) store.markDirty();
       }
-      store.markDirty();
-    }
-    if (dragRaf) {
-      cancelAnimationFrame(dragRaf);
-      dragRaf = 0;
     }
     drag.value = null;
   }
@@ -135,7 +135,7 @@ export function useCards(store, viewport) {
     const d = store.newCardDraft;
     const isUnknown = !d.fio && !d.birth && !d.birthPlace;
     const desired = clampToField(null, store.camX - 116, store.camY - 102);
-    const resolved = resolveNoOverlap("", desired.x, desired.y, "x");
+    const resolved = resolveNoOverlap("", desired.x, desired.y, "x", GAP_RELEASE);
     store.addCard({
       x: resolved.x,
       y: resolved.y,
@@ -144,9 +144,21 @@ export function useCards(store, viewport) {
       birthPlace: d.birthPlace,
       gender: d.gender,
       maidenName: d.maidenName,
+      uncertainFio: d.uncertainFio === true,
+      uncertainBirth: d.uncertainBirth === true,
+      uncertainBirthPlace: d.uncertainBirthPlace === true,
       isUnknown,
     });
-    store.newCardDraft = { fio: "", birth: "", birthPlace: "", gender: "", maidenName: "" };
+    store.newCardDraft = {
+      fio: "",
+      birth: "",
+      birthPlace: "",
+      gender: "",
+      maidenName: "",
+      uncertainFio: false,
+      uncertainBirth: false,
+      uncertainBirthPlace: false,
+    };
     store.showNewCardPanel = false;
   }
 
@@ -165,6 +177,9 @@ export function useCards(store, viewport) {
       birthPlace: c.birthPlace || "",
       gender: c.gender || "",
       maidenName: c.maidenName || "",
+      uncertainFio: c.uncertainFio === true,
+      uncertainBirth: c.uncertainBirth === true,
+      uncertainBirthPlace: c.uncertainBirthPlace === true,
     };
     store.showEditCardPanel = true;
   }
@@ -179,6 +194,9 @@ export function useCards(store, viewport) {
       birthPlace: empty ? "" : d.birthPlace,
       gender: empty ? "" : d.gender,
       maidenName: empty ? "" : d.maidenName,
+      uncertainFio: empty ? false : d.uncertainFio === true,
+      uncertainBirth: empty ? false : d.uncertainBirth === true,
+      uncertainBirthPlace: empty ? false : d.uncertainBirthPlace === true,
       isUnknown: empty,
     });
     store.showEditCardPanel = false;
@@ -204,4 +222,3 @@ export function useCards(store, viewport) {
     closeEditPanel,
   };
 }
-

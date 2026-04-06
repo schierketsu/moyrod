@@ -1,7 +1,43 @@
 import { computed, ref } from "vue";
 
+const CARD_W = 232;
+const CARD_H = 204;
+
+function cardBorderWidth(card) {
+  return card?.id === "m_self" ? 3 : 1;
+}
+
+function cardLayout(card) {
+  const border = cardBorderWidth(card);
+  const el = typeof document !== "undefined" ? document.getElementById(card.id) : null;
+  // clientHeight excludes border and matches port positioning context (padding box).
+  const contentH = el?.clientHeight || CARD_H;
+  return {
+    border,
+    contentH,
+  };
+}
+
 function center(card) {
-  return { x: card.x + 116, y: card.y + 102 };
+  const m = cardLayout(card);
+  return { x: card.x + m.border + CARD_W / 2, y: card.y + m.border + m.contentH / 2 };
+}
+
+function sideCenterPoints(a, b) {
+  const ma = cardLayout(a);
+  const mb = cardLayout(b);
+  const ay = a.y + ma.border + ma.contentH / 2;
+  const by = b.y + mb.border + mb.contentH / 2;
+  if (a.x <= b.x) {
+    return {
+      from: { x: a.x + ma.border + CARD_W, y: ay },
+      to: { x: b.x + mb.border, y: by },
+    };
+  }
+  return {
+    from: { x: a.x + ma.border, y: ay },
+    to: { x: b.x + mb.border + CARD_W, y: by },
+  };
 }
 
 export function useGraph(store) {
@@ -39,8 +75,10 @@ export function useGraph(store) {
         const from = byId.get(link.from);
         const to = byId.get(link.to);
         if (!from || !to) continue;
-        const a = { x: from.x + 116, y: from.y + 204 };
-        const b = { x: to.x + 116, y: to.y };
+        const mf = cardLayout(from);
+        const mt = cardLayout(to);
+        const a = { x: from.x + mf.border + CARD_W / 2, y: from.y + mf.border + mf.contentH };
+        const b = { x: to.x + mt.border + CARD_W / 2, y: to.y + mt.border };
         const cy = a.y + (b.y - a.y) * 0.48;
         out.push({
           key: `${kind}:${link.from}:${link.to}`,
@@ -52,11 +90,10 @@ export function useGraph(store) {
         const a = byId.get(link.a);
         const b = byId.get(link.b);
         if (!a || !b) continue;
-        const ca = center(a);
-        const cb = center(b);
+        const p = sideCenterPoints(a, b);
         out.push({
           key: `${kind}:${link.a}:${link.b}`,
-          d: `M ${ca.x} ${ca.y} L ${cb.x} ${cb.y}`,
+          d: `M ${p.from.x} ${p.from.y} L ${p.to.x} ${p.to.y}`,
           className: "lines-layer-path lines-layer-path--spouse",
           payload: { kind: "spouse", a: link.a, b: link.b },
         });
@@ -68,7 +105,8 @@ export function useGraph(store) {
         const ca = center(a);
         const cb = center(b);
         const union = { x: (ca.x + cb.x) / 2, y: (ca.y + cb.y) / 2 };
-        const top = { x: child.x + 116, y: child.y };
+        const mc = cardLayout(child);
+        const top = { x: child.x + mc.border + CARD_W / 2, y: child.y + mc.border };
         const cy = union.y + (top.y - union.y) * 0.52;
         out.push({
           key: `${kind}:${link.a}:${link.b}:${link.child}`,

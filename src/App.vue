@@ -98,16 +98,22 @@
             UID {{ auth.user?.uid }}
           </button>
           <div v-if="showUserMenu" class="auth-menu">
-            <button type="button" class="btn" @click="openMyProjects">Мои проекты</button>
+            <button type="button" class="btn" @click="openMyProfile">Мой профиль</button>
             <button type="button" class="btn" @click="logout">Выйти</button>
           </div>
         </div>
         <h1 class="logo"><span class="logo-line">свои</span><span class="logo-line">корни</span></h1>
-        <div class="toolbar-side toolbar-side--right">
+        <div v-if="route.path !== '/myprofile'" class="toolbar-side toolbar-side--right">
           <div class="toolbar-project-tools">
-            <button type="button" class="btn toolbar-project-title" @click="tree.showStats = true">
+            <button
+              v-if="tree.currentProjectId"
+              type="button"
+              class="btn toolbar-project-title"
+              @click="tree.showStats = true"
+            >
               {{ tree.currentProjectName }}
             </button>
+            <span v-else class="toolbar-no-project">Нет проекта</span>
           </div>
         </div>
       </div>
@@ -130,48 +136,79 @@
       </div>
     </header>
 
-    <TreeWorkspace class="app-tree" />
+    <template v-if="route.path !== '/myprofile'">
+      <TreeWorkspace class="app-tree" />
+    </template>
 
-    <div v-if="showProjectsPanel" class="stats-overlay" @click.self="showProjectsPanel = false">
-      <div class="stats-panel" role="dialog" aria-modal="true">
-        <h2 class="stats-title">Мои проекты</h2>
-        <div class="side-panel-field">
-          <label>Новый проект</label>
-          <input v-model="newProjectName" type="text" maxlength="200" placeholder="Название проекта" />
-        </div>
-        <div class="stats-actions">
-          <button type="button" class="btn primary" @click="createProject">Создать</button>
-          <button type="button" class="btn" @click="loadMatching">Найти похожих родственников</button>
-        </div>
-        <div class="stats-actions" style="flex-direction: column; align-items: stretch">
-          <button
-            v-for="project in tree.projects"
-            :key="project.id"
-            type="button"
-            class="btn"
-            @click="openProject(project.id)"
-          >
-            {{ project.name || "Без названия" }} (ID {{ project.id }})
-          </button>
-          <button
-            v-if="tree.currentProjectId"
-            type="button"
-            class="btn"
-            @click="deleteCurrentProject"
-          >
-            Удалить текущий проект
-          </button>
-        </div>
-        <div v-if="matching.length" class="stats-actions" style="flex-direction: column; align-items: stretch">
-          <h3 class="stats-title" style="font-size: 1rem; margin: 0.5rem 0 0">Совпадения</h3>
-          <div v-for="(item, idx) in matching" :key="idx" class="welcome-text" style="margin: 0">
-            score {{ item.score }}: {{ item.mine?.fio || "—" }} ↔ {{ item.other?.fio || "—" }} (UID {{ item.other?.ownerUserId }})
+    <section v-else class="profile-page">
+      <div class="profile-page-main">
+        <div class="profile-page-head profile-section-head">
+          <h2 class="profile-page-title">Мой профиль</h2>
+          <div class="profile-create-row">
+            <input
+              v-if="showCreateInput"
+              ref="createInputRef"
+              v-model="newProjectName"
+              type="text"
+              maxlength="200"
+              placeholder="Название нового проекта"
+            />
+            <button
+              type="button"
+              class="btn primary profile-create-btn"
+              :class="{ 'is-ready': !!newProjectName.trim() }"
+              @click="createProject"
+            >
+              Создать
+            </button>
           </div>
         </div>
+        <div class="profile-side-card profile-recommendations-block">
+          <div class="profile-side-head">
+            <h3 class="profile-side-title">Рекомендации родственников</h3>
+            <button type="button" class="btn" @click="loadMatching">Обновить</button>
+          </div>
+          <div v-if="matching.length" class="profile-matching-list">
+            <div v-for="(item, idx) in matching" :key="idx" class="profile-matching-item">
+              <strong>score {{ item.score }}</strong>
+              <span>{{ item.mine?.fio || "—" }} ↔ {{ item.other?.fio || "—" }}</span>
+              <small>UID {{ item.other?.ownerUserId }}</small>
+            </div>
+          </div>
+          <p v-else class="welcome-text">Пока нет рекомендаций.</p>
+        </div>
+        <div class="profile-projects-grid" role="list">
+          <article
+            v-for="project in tree.projects"
+            :key="project.id"
+            class="profile-project-card"
+            :class="{ 'is-active': tree.currentProjectId === project.id }"
+            role="listitem"
+            tabindex="0"
+            @click="openProject(project.id)"
+            @keydown.enter.prevent="openProject(project.id)"
+            @keydown.space.prevent="openProject(project.id)"
+          >
+            <button
+              type="button"
+              class="profile-project-delete"
+              aria-label="Удалить проект"
+              title="Удалить проект"
+              @click.stop="deleteProject(project.id)"
+            >
+              <img class="profile-project-delete-icon" src="/icons/garbage.png" width="18" height="18" alt="" />
+            </button>
+            <header class="profile-project-top">
+              <h3 class="profile-project-name">{{ project.name || "Без названия" }}</h3>
+              <p class="profile-project-meta">ID {{ project.id }}</p>
+            </header>
+          </article>
+        </div>
+          <p v-if="!tree.projects.length" class="profile-empty-state">У вас пока нет проектов. Создайте первый проект.</p>
       </div>
-    </div>
+    </section>
 
-    <div v-if="tree.showStats" class="stats-overlay" @click.self="tree.showStats = false">
+    <div v-if="tree.showStats && tree.currentProjectId" class="stats-overlay" @click.self="tree.showStats = false">
       <div class="stats-panel" role="dialog" aria-modal="true">
         <h2 class="stats-title">Статистика проекта</h2>
         <dl class="stats-dl">
@@ -194,7 +231,8 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import TreeWorkspace from "./modules/tree/components/TreeWorkspace.vue";
 import { useTreeStore } from "./modules/tree/state/treeStore";
 import { useAuthStore } from "./modules/auth/state/authStore";
@@ -203,13 +241,16 @@ import { authApi } from "./shared/api/authApi";
 
 const tree = useTreeStore();
 const auth = useAuthStore();
+const router = useRouter();
+const route = useRoute();
 const welcome = reactive({ fio: "", birth: "", birthPlace: "" });
 const authMode = ref("login");
 const authError = ref("");
 const showUserMenu = ref(false);
-const showProjectsPanel = ref(false);
 const newProjectName = ref("");
 const matching = ref([]);
+const showCreateInput = ref(false);
+const createInputRef = ref(null);
 const loginForm = reactive({ uid: "", password: "" });
 const registerForm = reactive({
   fullName: "",
@@ -240,8 +281,12 @@ watch(
     if (isAuthed) {
       await tree.bootstrap();
       ensureSelfCardFromAuthProfile();
+      if (route.path === "/myprofile") {
+        await refreshProfileData();
+      }
     } else {
       tree.ready = true;
+      if (route.path === "/myprofile") router.replace("/");
     }
   },
   { immediate: true }
@@ -253,6 +298,20 @@ watch(
     ensureSelfCardFromAuthProfile();
   }
 );
+
+watch(
+  () => route.path,
+  async (path) => {
+    if (path === "/myprofile" && auth.isAuthenticated) {
+      await refreshProfileData();
+    }
+  }
+);
+
+async function refreshProfileData() {
+  matching.value = [];
+  await tree.refreshProjects();
+}
 
 function ensureSelfCardFromAuthProfile() {
   if (!auth.isAuthenticated || !auth.user) return;
@@ -312,28 +371,35 @@ async function submitLogin() {
 async function logout() {
   await auth.logout();
   showUserMenu.value = false;
+  if (route.path === "/myprofile") router.replace("/");
 }
 
-async function openMyProjects() {
+async function openMyProfile() {
   showUserMenu.value = false;
-  showProjectsPanel.value = true;
-  matching.value = [];
-  await tree.refreshProjects();
+  await router.push("/myprofile");
 }
 
 async function createProject() {
-  await tree.createProject(newProjectName.value.trim() || "Мой проект");
+  if (!showCreateInput.value) {
+    showCreateInput.value = true;
+    await nextTick();
+    createInputRef.value?.focus?.();
+    return;
+  }
+  const name = newProjectName.value.trim();
+  if (!name) return;
+  await tree.createProject(name);
   newProjectName.value = "";
+  showCreateInput.value = false;
 }
 
 async function openProject(id) {
   await tree.openProject(id);
-  showProjectsPanel.value = false;
+  if (route.path === "/myprofile") await router.push("/");
 }
 
-async function deleteCurrentProject() {
-  if (!tree.currentProjectId) return;
-  await tree.deleteProject(tree.currentProjectId);
+async function deleteProject(id) {
+  await tree.deleteProject(id);
 }
 
 async function loadMatching() {
@@ -352,6 +418,7 @@ function confirmDelete() {
   }
   tree.confirmLinkDelete();
 }
+
 </script>
 
 <style>

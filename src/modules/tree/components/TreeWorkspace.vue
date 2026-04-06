@@ -1,5 +1,12 @@
 <template>
   <div class="field-stage">
+    <div v-if="store.apiAvailable && store.currentProjectId == null" class="no-project-overlay">
+      <div class="no-project-panel">
+        <h2 class="no-project-title">Нет проектов</h2>
+        <p class="no-project-text">Создайте проект в разделе «Мой профиль».</p>
+        <button type="button" class="btn primary" @click="goMyProfile">Мой профиль</button>
+      </div>
+    </div>
     <main
       ref="viewportRef"
       class="viewport"
@@ -54,17 +61,21 @@
                 <div class="card-standard-fields" :hidden="card.isUnknown">
                   <div class="card-field card-field--fio">
                     <span class="card-field-label">ФИО</span>
-                    <div class="card-fio-lines">
+                    <div class="card-fio-lines" :class="{ 'card-field-value--uncertain': card.uncertainFio }">
                       <span v-for="(line, idx) in splitFioLines(card.fio)" :key="`${card.id}-fio-${idx}`" class="card-fio-line">{{ line }}</span>
                     </div>
                   </div>
                   <div class="card-field">
                     <span class="card-field-label">Дата рождения</span>
-                    <div class="card-field-value">{{ card.birth || "" }}</div>
+                    <div class="card-field-value" :class="{ 'card-field-value--uncertain': card.uncertainBirth }">
+                      {{ formatBirthDateRu(card.birth) || "—" }}
+                    </div>
                   </div>
                   <div class="card-field">
                     <span class="card-field-label">Место рождения</span>
-                    <div class="card-field-value">{{ card.birthPlace || "" }}</div>
+                    <div class="card-field-value" :class="{ 'card-field-value--uncertain': card.uncertainBirthPlace }">
+                      {{ (card.birthPlace && String(card.birthPlace).trim()) || "—" }}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -108,6 +119,7 @@
       </div>
     </main>
     <button
+      v-if="store.currentProjectId"
       type="button"
       class="fab-save"
       aria-label="Сохранить проект"
@@ -116,7 +128,15 @@
     >
       {{ store.isSaving ? "Сохранение..." : "Сохранить" }}
     </button>
-    <button type="button" class="fab-add" aria-label="Добавить карточку" @click="store.showNewCardPanel = true">Добавить</button>
+    <button
+      v-if="store.currentProjectId"
+      type="button"
+      class="fab-add"
+      aria-label="Добавить карточку"
+      @click="store.showNewCardPanel = true"
+    >
+      Добавить
+    </button>
     <div
       class="side-panel-backdrop"
       :class="{ 'is-open': store.showNewCardPanel }"
@@ -126,9 +146,51 @@
       <div class="side-panel-inner">
         <h2 class="side-panel-title">Новая карточка</h2>
         <form class="side-panel-form" @submit.prevent="addCardFromDraft">
-          <div class="side-panel-field"><label>ФИО</label><input v-model="store.newCardDraft.fio" type="text" /></div>
-          <div class="side-panel-field"><label>Дата рождения</label><input v-model="store.newCardDraft.birth" type="date" /></div>
-          <div class="side-panel-field"><label>Место рождения</label><input v-model="store.newCardDraft.birthPlace" type="text" /></div>
+          <div class="side-panel-field">
+            <label class="side-panel-field-row">
+              <span>ФИО</span>
+              <span class="field-uncertain-toggle"><input v-model="store.newCardDraft.uncertainFio" type="checkbox" aria-label="ФИО требует проверки" /></span>
+            </label>
+            <input v-model="store.newCardDraft.fio" type="text" />
+          </div>
+          <div class="side-panel-field">
+            <label class="side-panel-field-row">
+              <span>Дата рождения</span>
+              <span class="field-uncertain-toggle"><input v-model="store.newCardDraft.uncertainBirth" type="checkbox" aria-label="Дата рождения требует проверки" /></span>
+            </label>
+            <div class="side-panel-birth-parts">
+              <input
+                v-model="newBirth.day"
+                class="side-panel-birth-day"
+                type="number"
+                inputmode="numeric"
+                min="1"
+                max="31"
+                placeholder="День"
+              />
+              <select v-model="newBirth.month" class="side-panel-birth-month">
+                <option v-for="(opt, idx) in birthMonthOptions" :key="`nb-m-${idx}`" :value="opt.value">
+                  {{ opt.label }}
+                </option>
+              </select>
+              <input
+                v-model="newBirth.year"
+                class="side-panel-birth-year"
+                type="number"
+                inputmode="numeric"
+                min="1000"
+                max="3000"
+                placeholder="Год"
+              />
+            </div>
+          </div>
+          <div class="side-panel-field">
+            <label class="side-panel-field-row">
+              <span>Место рождения</span>
+              <span class="field-uncertain-toggle"><input v-model="store.newCardDraft.uncertainBirthPlace" type="checkbox" aria-label="Место рождения требует проверки" /></span>
+            </label>
+            <input v-model="store.newCardDraft.birthPlace" type="text" />
+          </div>
           <div class="side-panel-field side-panel-field--gender">
             <span class="side-panel-field-legend">Пол</span>
             <div class="gender-pick">
@@ -151,6 +213,7 @@
           <div class="side-panel-actions side-panel-actions--new-card-submit">
             <button type="submit" class="btn primary">{{ isNewCardEmpty ? "Создать пустую карточку" : "Создать карточку" }}</button>
           </div>
+          <p class="field-uncertain-hint">Отметьте квадрат у поля, если информация требует проверки.</p>
         </form>
       </div>
     </aside>
@@ -164,10 +227,49 @@
       <div class="side-panel-inner">
         <h2 class="side-panel-title">Редактирование карточки</h2>
         <form class="side-panel-form" @submit.prevent="saveEdit">
-          <div class="side-panel-field"><label>ФИО</label><input v-model="store.editDraft.fio" type="text" /></div>
-          <div class="side-panel-field"><label>Дата рождения</label><input v-model="store.editDraft.birth" type="date" /></div>
           <div class="side-panel-field">
-            <label>Место рождения</label>
+            <label class="side-panel-field-row">
+              <span>ФИО</span>
+              <span class="field-uncertain-toggle"><input v-model="store.editDraft.uncertainFio" type="checkbox" aria-label="ФИО требует проверки" /></span>
+            </label>
+            <input v-model="store.editDraft.fio" type="text" />
+          </div>
+          <div class="side-panel-field">
+            <label class="side-panel-field-row">
+              <span>Дата рождения</span>
+              <span class="field-uncertain-toggle"><input v-model="store.editDraft.uncertainBirth" type="checkbox" aria-label="Дата рождения требует проверки" /></span>
+            </label>
+            <div class="side-panel-birth-parts">
+              <input
+                v-model="editBirth.day"
+                class="side-panel-birth-day"
+                type="number"
+                inputmode="numeric"
+                min="1"
+                max="31"
+                placeholder="День"
+              />
+              <select v-model="editBirth.month" class="side-panel-birth-month">
+                <option v-for="(opt, idx) in birthMonthOptions" :key="`eb-m-${idx}`" :value="opt.value">
+                  {{ opt.label }}
+                </option>
+              </select>
+              <input
+                v-model="editBirth.year"
+                class="side-panel-birth-year"
+                type="number"
+                inputmode="numeric"
+                min="1000"
+                max="3000"
+                placeholder="Год"
+              />
+            </div>
+          </div>
+          <div class="side-panel-field">
+            <label class="side-panel-field-row">
+              <span>Место рождения</span>
+              <span class="field-uncertain-toggle"><input v-model="store.editDraft.uncertainBirthPlace" type="checkbox" aria-label="Место рождения требует проверки" /></span>
+            </label>
             <input v-model="store.editDraft.birthPlace" type="text" @input="onEditBirthPlaceInput" />
             <div v-if="editPlaceSuggestions.length" class="autocomplete-dropdown">
               <button
@@ -204,6 +306,7 @@
             <button type="button" class="btn" @click="store.showEditCardPanel = false">Отмена</button>
             <button type="submit" class="btn primary">Сохранить</button>
           </div>
+          <p class="field-uncertain-hint">Отметьте квадрат у поля, если информация требует проверки.</p>
         </form>
       </div>
     </aside>
@@ -211,14 +314,22 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import { useTreeStore } from "../state/treeStore";
 import { useViewport } from "../composables/useViewport";
 import { useCards } from "../composables/useCards";
 import { useGraph } from "../composables/useGraph";
 import { projectsApi } from "../../../shared/api/projectsApi";
+import { formatBirthDateRu } from "../../../shared/formatBirthRu";
+import { BIRTH_MONTH_OPTIONS, buildBirthFromParts, parseBirthParts } from "../../../shared/birthParts";
 
 const store = useTreeStore();
+const router = useRouter();
+
+function goMyProfile() {
+  router.push("/myprofile");
+}
 const { viewportRef, worldStyle, zoomBy, onWheel, onPointerDown, onPointerMove, onPointerUp, fieldCoordsFromClient } =
   useViewport(store);
 const { linksPath, unionNodes, pendingUnion, portDown, armUnion } = useGraph(store);
@@ -230,6 +341,52 @@ const isNewCardEmpty = computed(
 );
 const editPlaceSuggestions = ref([]);
 let editSuggestTimer = null;
+
+const birthMonthOptions = BIRTH_MONTH_OPTIONS;
+const newBirth = reactive({ day: "", month: "", year: "" });
+const editBirth = reactive({ day: "", month: "", year: "" });
+
+watch(
+  () => store.showNewCardPanel,
+  (open) => {
+    if (open) {
+      const p = parseBirthParts(store.newCardDraft.birth);
+      newBirth.day = p.day;
+      newBirth.month = p.month;
+      newBirth.year = p.year;
+    }
+  }
+);
+
+watch(
+  () => store.showEditCardPanel,
+  (open) => {
+    if (open) {
+      const p = parseBirthParts(store.editDraft.birth);
+      editBirth.day = p.day;
+      editBirth.month = p.month;
+      editBirth.year = p.year;
+    }
+  }
+);
+
+watch(
+  newBirth,
+  () => {
+    if (!store.showNewCardPanel) return;
+    store.newCardDraft.birth = buildBirthFromParts(newBirth);
+  },
+  { deep: true }
+);
+
+watch(
+  editBirth,
+  () => {
+    if (!store.showEditCardPanel) return;
+    store.editDraft.birth = buildBirthFromParts(editBirth);
+  },
+  { deep: true }
+);
 
 function splitFioLines(fio) {
   const parts = String(fio || "").trim().split(/\s+/).filter(Boolean);
