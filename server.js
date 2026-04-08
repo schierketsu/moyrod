@@ -379,96 +379,33 @@ function requireAuth(req, res, next) {
 /** «Сильное» совпадение; ниже попадает в список как weak (всё равно показываем). */
 const MIN_MATCH_SCORE = 10;
 
-function placeTokensSet(placeNorm) {
-  return new Set(
-    String(placeNorm || "")
-      .split(" ")
-      .filter((t) => t.length >= 3)
-  );
+function birthPartsFromNorm(v) {
+  const s = String(v || "").trim();
+  if (!s) return { y: null, m: null, d: null };
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) };
+  m = s.match(/^(\d{4})-(\d{2})$/);
+  if (m) return { y: Number(m[1]), m: Number(m[2]), d: null };
+  m = s.match(/^(\d{4})$/);
+  if (m) return { y: Number(m[1]), m: null, d: null };
+  return { y: null, m: null, d: null };
 }
 
 function scoreCardMatch(a, b) {
   let score = 0;
-  const bnA = String(a.birth_norm || "");
-  const bnB = String(b.birth_norm || "");
+  const fioA = String(a.fio_norm || "").trim();
+  const fioB = String(b.fio_norm || "").trim();
+  if (fioA && fioB && fioA === fioB) score += 36;
 
-  if (bnA && bnB && bnA === bnB) {
-    score += 35;
-  } else if (bnA.length >= 4 && bnB.length >= 4) {
-    const yA = bnA.slice(0, 4);
-    const yB = bnB.slice(0, 4);
-    if (/^\d{4}$/.test(yA) && yA === yB) {
-      score += 22;
-    }
-  }
+  const bpA = birthPartsFromNorm(a.birth_norm);
+  const bpB = birthPartsFromNorm(b.birth_norm);
+  if (bpA.y != null && bpB.y != null && bpA.y === bpB.y) score += 10;
+  if (bpA.m != null && bpB.m != null && bpA.m === bpB.m) score += 10;
+  if (bpA.d != null && bpB.d != null && bpA.d === bpB.d) score += 10;
 
   const plA = String(a.birth_place_norm || "");
   const plB = String(b.birth_place_norm || "");
-  if (plA && plB && plA === plB) {
-    score += 25;
-  } else if (plA && plB && plA !== plB) {
-    const sa = placeTokensSet(plA);
-    const sb = placeTokensSet(plB);
-    let pl = 0;
-    for (const t of sa) if (sb.has(t)) pl += 1;
-    if (pl > 0) score += Math.min(22, pl * 7);
-  }
-
-  if (a.gender && b.gender && a.gender === b.gender) score += 10;
-
-  const at = new Set(String(a.fio_norm || "").split(" ").filter(Boolean));
-  const bt = new Set(String(b.fio_norm || "").split(" ").filter(Boolean));
-  let overlap = 0;
-  for (const t of at) if (bt.has(t)) overlap += 1;
-  score += Math.min(36, overlap * 12);
-
-  if (overlap === 0) {
-    const ar = String(a.fio_norm || "")
-      .split(" ")
-      .filter((t) => t.length >= 4);
-    const br = String(b.fio_norm || "")
-      .split(" ")
-      .filter((t) => t.length >= 4);
-    outer: for (const x of ar) {
-      for (const y of br) {
-        if (x === y) continue;
-        if (x.startsWith(y) || y.startsWith(x)) {
-          score += 14;
-          break outer;
-        }
-      }
-    }
-  }
-
-  if (overlap === 0) {
-    const w1 = String(a.fio_norm || "")
-      .split(" ")
-      .filter(Boolean)[0];
-    const w2 = String(b.fio_norm || "")
-      .split(" ")
-      .filter(Boolean)[0];
-    if (w1 && w2 && w1.length >= 3 && w2.length >= 3 && w1.slice(0, 3) === w2.slice(0, 3)) {
-      score += 12;
-    }
-  }
-
-  if (overlap === 0) {
-    const ta = String(a.fio_norm || "")
-      .split(" ")
-      .filter((t) => t.length >= 3 && t.length <= 5);
-    const tb = String(b.fio_norm || "")
-      .split(" ")
-      .filter((t) => t.length >= 3 && t.length <= 5);
-    inner: for (const x of ta) {
-      for (const y of tb) {
-        if (x === y) continue;
-        if (x.startsWith(y) || y.startsWith(x)) {
-          score += 5;
-          break inner;
-        }
-      }
-    }
-  }
+  if (plA && plB && plA === plB) score += 34;
 
   return score;
 }

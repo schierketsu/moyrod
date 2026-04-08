@@ -582,12 +582,18 @@ function byGender(gender, male, female, neutral) {
   return neutral;
 }
 
+function capitalizeFirst(text) {
+  const s = String(text || "");
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function ancestorTitle(gender, up) {
   if (up <= 0) return "Родственник";
   if (up === 1) return byGender(gender, "Отец", "Мать", "Родитель");
   if (up === 2) return byGender(gender, "Дедушка", "Бабушка", "Дедушка/бабушка");
   const pra = "пра".repeat(Math.max(1, up - 2));
-  return byGender(gender, `${pra}дедушка`, `${pra}бабушка`, `${pra}дедушка/бабушка`);
+  return capitalizeFirst(byGender(gender, `${pra}дедушка`, `${pra}бабушка`, `${pra}дедушка/бабушка`));
 }
 
 function descendantTitle(gender, down) {
@@ -595,7 +601,19 @@ function descendantTitle(gender, down) {
   if (down === 1) return byGender(gender, "Сын", "Дочь", "Ребенок");
   if (down === 2) return byGender(gender, "Внук", "Внучка", "Внук/внучка");
   const pra = "пра".repeat(Math.max(1, down - 2));
-  return byGender(gender, `${pra}внук`, `${pra}внучка`, `${pra}внук/внучка`);
+  return capitalizeFirst(byGender(gender, `${pra}внук`, `${pra}внучка`, `${pra}внук/внучка`));
+}
+
+function siblingTitle(gender) {
+  return byGender(gender, "Брат", "Сестра", "Брат/сестра");
+}
+
+function ancestorGenitiveRef(up, ancestorGender = "") {
+  if (up <= 0) return "родственника";
+  if (up === 1) return byGender(ancestorGender, "отца", "матери", "родителя");
+  if (up === 2) return byGender(ancestorGender, "дедушки", "бабушки", "бабушки/дедушки");
+  const pra = "пра".repeat(Math.max(1, up - 2));
+  return byGender(ancestorGender, `${pra}дедушки`, `${pra}бабушки`, `${pra}бабушки/${pra}дедушки`);
 }
 
 function buildRelationGraph() {
@@ -626,24 +644,25 @@ function buildRelationGraph() {
 
 function shortestRelationPath(selfId, targetId) {
   const graph = buildRelationGraph();
-  const q = [{ id: selfId, rels: [] }];
+  const q = [{ id: selfId, rels: [], nodes: [selfId] }];
   const seen = new Set([selfId]);
 
   for (let i = 0; i < q.length; i += 1) {
     const cur = q[i];
-    if (cur.id === targetId) return cur.rels;
+    if (cur.id === targetId) return { rels: cur.rels, nodes: cur.nodes };
     const edges = graph.get(cur.id) || [];
     for (const e of edges) {
       if (seen.has(e.to)) continue;
       seen.add(e.to);
-      q.push({ id: e.to, rels: [...cur.rels, e.rel] });
+      q.push({ id: e.to, rels: [...cur.rels, e.rel], nodes: [...cur.nodes, e.to] });
     }
   }
   return null;
 }
 
-function relationTitleByPath(path, targetGender) {
-  if (!path || path.length === 0) return "Это вы";
+function relationTitleByPath(pathInfo, targetGender) {
+  if (!pathInfo || !Array.isArray(pathInfo.rels) || pathInfo.rels.length === 0) return "Это вы";
+  const path = pathInfo.rels;
   const sig = path.join(">");
 
   if (sig === "parent") return ancestorTitle(targetGender, 1);
@@ -676,16 +695,19 @@ function relationTitleByPath(path, targetGender) {
     const isDownOnly = downPart.length > 0 && downPart.every((r) => r === "child");
     if (isDownOnly) {
       const down = downPart.length;
-      if (up === 1 && down === 1) return byGender(targetGender, "Брат", "Сестра", "Брат/сестра");
+      if (up === 1 && down === 1) return siblingTitle(targetGender);
       if (up === 2 && down === 1) return byGender(targetGender, "Дядя", "Тетя", "Дядя/тетя");
-      if (up >= 3 && down === 1) {
-        const elder = ancestorTitle("", up - 1).toLowerCase();
-        return `Брат/сестра ${elder}`;
-      }
       if (up === 1 && down === 2) return byGender(targetGender, "Племянник", "Племянница", "Племянник/племянница");
       if (up === 2 && down === 2) return byGender(targetGender, "Двоюродный брат", "Двоюродная сестра", "Двоюродный брат/сестра");
       if (up >= 2 && down >= 2) {
         return `Дальний родственник по боковой линии (${up} вверх, ${down} вниз)`;
+      }
+      if (up >= 3 && down === 1) {
+        const refNodeIdx = up - 1;
+        const refId = pathInfo.nodes?.[refNodeIdx];
+        const refCard = refId ? store.cards.find((c) => c.id === refId) : null;
+        const refGender = String(refCard?.gender || "");
+        return `${siblingTitle(targetGender)} ${ancestorGenitiveRef(up - 1, refGender)}`;
       }
     }
   }

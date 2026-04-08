@@ -101,7 +101,7 @@
 
     <header class="toolbar">
       <div class="toolbar-inner toolbar-inner--tripart">
-        <div class="toolbar-side toolbar-side--left">
+        <div ref="userMenuRoot" class="toolbar-side toolbar-side--left">
           <button type="button" class="btn toolbar-project-title" @click="showUserMenu = !showUserMenu">
             UID {{ auth.user?.uid }}
           </button>
@@ -150,7 +150,7 @@
 
     <section v-else class="profile-page">
       <div class="profile-page-main">
-        <div class="profile-page-head profile-section-head">
+        <div class="profile-page-head">
           <h2 class="profile-page-title">Мой профиль</h2>
           <div class="profile-create-row">
             <input
@@ -170,23 +170,6 @@
               Создать
             </button>
           </div>
-        </div>
-        <div class="profile-side-card profile-recommendations-block">
-          <div class="profile-side-head">
-            <h3 class="profile-side-title">Совпадения с другими пользователями</h3>
-            <div class="profile-matching-actions">
-              <button type="button" class="btn" @click="loadMatching">Обновить</button>
-            </div>
-          </div>
-          <div v-if="matching.length" class="profile-matching-list">
-            <div v-for="(item, idx) in matching" :key="idx" class="profile-matching-item">
-              <strong>score {{ item.score }}</strong>
-              <span v-if="item.weak" class="profile-matching-weak">слабое</span>
-              <span>{{ item.mine?.fio || "—" }} ↔ {{ item.other?.fio || "—" }}</span>
-              <small>UID {{ item.other?.ownerUid ?? item.other?.ownerUserId }}</small>
-            </div>
-          </div>
-          <p v-else class="welcome-text">{{ matchingHint || "Пока нет рекомендаций." }}</p>
         </div>
         <div class="profile-projects-grid" role="list">
           <article
@@ -225,6 +208,40 @@
         </div>
           <p v-if="!tree.projects.length" class="profile-empty-state">У вас пока нет проектов. Создайте первый проект.</p>
       </div>
+      <aside class="profile-page-side">
+        <div class="profile-side-card profile-recommendations-block">
+          <div class="profile-side-head">
+            <h3 class="profile-side-title">Совпадения с другими пользователями</h3>
+            <div class="profile-matching-actions">
+              <button type="button" class="btn" @click="loadMatching">Поиск</button>
+            </div>
+          </div>
+          <div v-if="matching.length" class="profile-matching-list">
+            <div
+              v-for="(item, idx) in matching"
+              :key="idx"
+              class="profile-matching-item"
+              :class="{
+                'profile-matching-item--high': Number(item.score || 0) >= 76,
+                'profile-matching-item--medium': Number(item.score || 0) >= 46 && Number(item.score || 0) < 76
+              }"
+            >
+              <div class="profile-matching-top">
+                <div class="profile-matching-fio">
+                  <span
+                    v-for="(line, lineIdx) in splitFioToLines(item.mine?.fio || item.other?.fio || '')"
+                    :key="`m-${idx}-fio-${lineIdx}`"
+                    :class="{ 'profile-matching-fio-surname': lineIdx === 0 }"
+                  >{{ line }}</span>
+                </div>
+                <div class="profile-matching-avatar-placeholder" aria-hidden="true"></div>
+              </div>
+              <small>UID {{ item.other?.ownerUid ?? item.other?.ownerUserId }}</small>
+            </div>
+          </div>
+          <p v-else class="welcome-text">{{ matchingHint || "Пока нет рекомендаций." }}</p>
+        </div>
+      </aside>
     </section>
 
     <div v-if="tree.showStats && tree.currentProjectId" class="stats-overlay" @click.self="tree.showStats = false">
@@ -242,7 +259,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import TreeWorkspace from "./modules/tree/components/TreeWorkspace.vue";
 import { useTreeStore } from "./modules/tree/state/treeStore";
@@ -259,6 +276,7 @@ const welcome = reactive({ fio: "", birth: "", birthPlace: "" });
 const authMode = ref("login");
 const authError = ref("");
 const showUserMenu = ref(false);
+const userMenuRoot = ref(null);
 const newProjectName = ref("");
 const matching = ref([]);
 const matchingHint = ref("");
@@ -277,6 +295,22 @@ const registerForm = reactive({
 const placeSuggestions = ref([]);
 let suggestTimer = null;
 void auth.bootstrap();
+
+function closeUserMenuOnOutsidePointer(ev) {
+  if (!showUserMenu.value) return;
+  const root = userMenuRoot.value;
+  if (root && typeof root.contains === "function" && !root.contains(ev.target)) {
+    showUserMenu.value = false;
+  }
+}
+
+onMounted(() => {
+  document.addEventListener("pointerdown", closeUserMenuOnOutsidePointer, true);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("pointerdown", closeUserMenuOnOutsidePointer, true);
+});
 
 const formattedSavedAt = computed(() =>
   tree.lastProjectUpdatedAt ? new Date(tree.lastProjectUpdatedAt).toLocaleString("ru-RU") : "—"
@@ -440,11 +474,24 @@ function blockingReasonLabel(code) {
   return map[code] || code;
 }
 
+function matchingChanceLabel(score) {
+  const s = Number(score || 0);
+  if (s >= 76) return "ВЫСОКИЙ ШАНС";
+  return "СРЕДНИЙ ШАНС";
+}
+
+function splitFioToLines(fio) {
+  const parts = String(fio || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return ["—"];
+  return parts;
+}
+
 async function loadMatching() {
   try {
     const { suggestions, meta } = await authApi.matchingSuggestions();
-    matching.value = suggestions;
-    matchingHint.value = suggestions.length === 0 ? String(meta?.hint || "").trim() : "";
+    const filtered = (Array.isArray(suggestions) ? suggestions : []).filter((x) => Number(x?.score || 0) >= 46);
+    matching.value = filtered;
+    matchingHint.value = filtered.length === 0 ? String(meta?.hint || "").trim() : "";
   } catch (e) {
     matching.value = [];
     matchingHint.value = e?.message
