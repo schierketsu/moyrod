@@ -1,4 +1,4 @@
-/** Порядок в UI: день → месяц → год. Хранение: YYYY-MM-DD (или частично, как в normalizeBirthInput). */
+/** Порядок в UI: день → месяц → год. Хранение: YYYY-MM-DD, YYYY-MM, YYYY или MM-DD (без года). */
 
 export const BIRTH_MONTH_OPTIONS = [
   { value: "", label: "месяц" },
@@ -37,6 +37,14 @@ export function parseBirthParts(raw) {
   if (m) {
     return { day: "", month: "", year: m[1] };
   }
+  m = s.match(/^(\d{2})-(\d{2})$/);
+  if (m) {
+    return {
+      day: String(parseInt(m[2], 10)),
+      month: String(parseInt(m[1], 10)),
+      year: "",
+    };
+  }
   return { day: "", month: "", year: "" };
 }
 
@@ -61,6 +69,9 @@ export function buildBirthFromParts(parts) {
     if (dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d) {
       return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
     }
+  }
+  if (!year && month && day && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+    return `${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   }
   return "";
 }

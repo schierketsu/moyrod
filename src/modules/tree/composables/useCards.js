@@ -86,6 +86,9 @@ export function useCards(store, viewport) {
     if (card.pinned) return;
     if (ev.button !== 0) return;
     if (ev.target.closest(".card-icon-btn")) return;
+    if (!viewport.isSelected(card.id)) {
+      viewport.selectOnly(card.id);
+    }
     const m = viewport.fieldCoordsFromClient(ev.clientX, ev.clientY);
     sizeCache.clear();
     const el = ev.currentTarget;
@@ -96,12 +99,29 @@ export function useCards(store, viewport) {
         /* ignore */
       }
     }
+    const selectedIds = viewport.getSelectedCardIds().filter((id) => {
+      const row = store.cards.find((x) => x.id === id);
+      return row && !row.pinned;
+    });
+    const dragIds = selectedIds.includes(card.id) ? selectedIds : [card.id];
+    const origins = dragIds
+      .map((id) => {
+        const row = store.cards.find((x) => x.id === id);
+        if (!row) return null;
+        const s = getCardSize(id);
+        return { id, x: row.x, y: row.y, w: s.w, h: s.h };
+      })
+      .filter(Boolean);
     drag.value = {
       id: card.id,
+      ids: dragIds,
+      origins,
       dx: m.x - card.x,
       dy: m.y - card.y,
       startX: card.x,
       startY: card.y,
+      startPointerX: m.x,
+      startPointerY: m.y,
       pointerId: ev.pointerId,
     };
   }
@@ -126,6 +146,29 @@ export function useCards(store, viewport) {
     if (!c) return;
 
     const m = viewport.fieldCoordsFromClient(ev.clientX, ev.clientY);
+    if ((drag.value.ids || []).length > 1) {
+      const wantedDx = m.x - drag.value.startPointerX;
+      const wantedDy = m.y - drag.value.startPointerY;
+      let minDx = -Infinity;
+      let maxDx = Infinity;
+      let minDy = -Infinity;
+      let maxDy = Infinity;
+      for (const o of drag.value.origins || []) {
+        minDx = Math.max(minDx, -o.x);
+        maxDx = Math.min(maxDx, store.fieldW - o.w - o.x);
+        minDy = Math.max(minDy, -o.y);
+        maxDy = Math.min(maxDy, store.fieldH - o.h - o.y);
+      }
+      const clampedDx = Math.max(minDx, Math.min(maxDx, wantedDx));
+      const clampedDy = Math.max(minDy, Math.min(maxDy, wantedDy));
+      for (const o of drag.value.origins || []) {
+        const row = store.cards.find((x) => x.id === o.id);
+        if (!row) continue;
+        row.x = o.x + clampedDx;
+        row.y = o.y + clampedDy;
+      }
+      return;
+    }
     const dragSize = getCardSize(drag.value.id);
     const desired = clampToField(m.x - drag.value.dx, m.y - drag.value.dy, dragSize.w, dragSize.h);
     const axis = Math.abs(desired.x - c.x) >= Math.abs(desired.y - c.y) ? "x" : "y";
@@ -139,13 +182,23 @@ export function useCards(store, viewport) {
     releasePointerCaptureIfNeeded();
     const d = drag.value;
     if (d) {
-      const c = store.cards.find((x) => x.id === d.id);
-      if (c) {
-        const next = resolveNoOverlap(c.id, c.x, c.y, "x", GAP_RELEASE);
-        c.x = next.x;
-        c.y = next.y;
-        const shifted = c.x !== d.startX || c.y !== d.startY;
-        if (shifted) store.markDirty();
+      if ((d.ids || []).length > 1) {
+        let shiftedGroup = false;
+        for (const o of d.origins || []) {
+          const row = store.cards.find((x) => x.id === o.id);
+          if (!row) continue;
+          if (row.x !== o.x || row.y !== o.y) shiftedGroup = true;
+        }
+        if (shiftedGroup) store.markDirty();
+      } else {
+        const c = store.cards.find((x) => x.id === d.id);
+        if (c) {
+          const next = resolveNoOverlap(c.id, c.x, c.y, "x", GAP_RELEASE);
+          c.x = next.x;
+          c.y = next.y;
+          const shifted = c.x !== d.startX || c.y !== d.startY;
+          if (shifted) store.markDirty();
+        }
       }
     }
     sizeCache.clear();

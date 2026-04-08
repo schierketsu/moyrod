@@ -1010,6 +1010,15 @@
   pointer-events: auto;
 }
 
+.selection-box {
+  position: absolute;
+  z-index: 9;
+  border: 1px solid rgba(255, 159, 26, 0.9);
+  background: rgba(255, 159, 26, 0.14);
+  pointer-events: none;
+  border-radius: 6px;
+}
+
 .map-zoom-btn {
   width: 3.25rem;
   height: 3.25rem;
@@ -1101,8 +1110,13 @@
   box-shadow: var(--shadow-sm), 0 12px 32px rgba(0, 0, 0, 0.05);
 }
 
+.family-card--selected {
+  outline: 2px solid #ff9f1a;
+  outline-offset: 0;
+}
+
 /* Self-card differs by warm top bar, not outline. */
-.family-card--self .card-drag {
+.family-card.family-card--self .card-drag {
   background: #e6a23a;
   border-bottom-color: #d08a24;
 }
@@ -1847,6 +1861,33 @@
   padding-right: 2rem;
 }
 
+.profile-project-share-badge {
+  display: inline-block;
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #4a6b3a;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.profile-project-share-row {
+  margin-top: auto;
+  padding-top: 0.65rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  color: #4a4038;
+  cursor: pointer;
+  user-select: none;
+}
+
+.profile-project-share-row input {
+  margin-top: 0.15rem;
+  flex-shrink: 0;
+}
+
 .profile-project-card.is-active {
   border: none;
   box-shadow: none;
@@ -1972,6 +2013,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.profile-matching-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: flex-end;
 }
 
 .profile-matching-list {
@@ -1996,6 +2045,14 @@
 
 .profile-matching-item small {
   color: #7b7064;
+}
+
+.profile-matching-weak {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #8a7a68;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .profile-empty-state {

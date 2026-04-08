@@ -173,17 +173,20 @@
         </div>
         <div class="profile-side-card profile-recommendations-block">
           <div class="profile-side-head">
-            <h3 class="profile-side-title">Рекомендации родственников</h3>
-            <button type="button" class="btn" @click="loadMatching">Обновить</button>
+            <h3 class="profile-side-title">Совпадения с другими пользователями</h3>
+            <div class="profile-matching-actions">
+              <button type="button" class="btn" @click="loadMatching">Обновить</button>
+            </div>
           </div>
           <div v-if="matching.length" class="profile-matching-list">
             <div v-for="(item, idx) in matching" :key="idx" class="profile-matching-item">
               <strong>score {{ item.score }}</strong>
+              <span v-if="item.weak" class="profile-matching-weak">слабое</span>
               <span>{{ item.mine?.fio || "—" }} ↔ {{ item.other?.fio || "—" }}</span>
-              <small>UID {{ item.other?.ownerUserId }}</small>
+              <small>UID {{ item.other?.ownerUid ?? item.other?.ownerUserId }}</small>
             </div>
           </div>
-          <p v-else class="welcome-text">Пока нет рекомендаций.</p>
+          <p v-else class="welcome-text">{{ matchingHint || "Пока нет рекомендаций." }}</p>
         </div>
         <div class="profile-projects-grid" role="list">
           <article
@@ -210,6 +213,14 @@
               <h3 class="profile-project-name">{{ project.name || "Без названия" }}</h3>
               <p class="profile-project-meta">ID {{ project.id }}</p>
             </header>
+            <label class="profile-project-share-row" @click.stop @keydown.stop>
+              <input
+                type="checkbox"
+                :checked="project.shareForMatching === true"
+                @change="toggleProjectShare(project, $event)"
+              />
+              <span>Участвовать в поиске родственников</span>
+            </label>
           </article>
         </div>
           <p v-if="!tree.projects.length" class="profile-empty-state">У вас пока нет проектов. Создайте первый проект.</p>
@@ -224,10 +235,6 @@
           <div class="stats-dl-row"><dt>Связей</dt><dd>{{ tree.linkCount }}</dd></div>
           <div class="stats-dl-row"><dt>Сохранён</dt><dd>{{ formattedSavedAt }}</dd></div>
         </dl>
-        <label class="side-panel-check">
-          <input :checked="tree.shareForMatching" type="checkbox" @change="onShareForMatchingChange" />
-          Участвовать в поиске похожих родственников (весь проект)
-        </label>
       </div>
     </div>
     </div>
@@ -254,6 +261,7 @@ const authError = ref("");
 const showUserMenu = ref(false);
 const newProjectName = ref("");
 const matching = ref([]);
+const matchingHint = ref("");
 const showCreateInput = ref(false);
 const createInputRef = ref(null);
 const loginForm = reactive({ uid: "", password: "" });
@@ -325,8 +333,8 @@ watch(
 );
 
 async function refreshProfileData() {
-  matching.value = [];
   await tree.refreshProjects();
+  await loadMatching();
 }
 
 function ensureSelfCardFromAuthProfile() {
@@ -419,8 +427,45 @@ async function deleteProject(id) {
   await tree.deleteProject(id);
 }
 
+function blockingReasonLabel(code) {
+  const map = {
+    only_one_user_in_db: "в базе только один пользователь — нужен второй аккаунт",
+    no_others_in_pool: "другие есть, но их карточки не в пуле (выключено участие или пустые поля)",
+    no_sharing_projects: "ни один ваш проект не отмечен для участия в подборе",
+    no_own_cards_in_pool: "в пуле нет ваших карточек с ФИО/датой/местом",
+    no_comparable_pairs: "нет пар с полями ФИО/дата/место для сравнения",
+    below_threshold: "совпадения слишком слабые по баллу",
+    ok: "",
+  };
+  return map[code] || code;
+}
+
 async function loadMatching() {
-  matching.value = await authApi.matchingSuggestions();
+  try {
+    const { suggestions, meta } = await authApi.matchingSuggestions();
+    matching.value = suggestions;
+    matchingHint.value = suggestions.length === 0 ? String(meta?.hint || "").trim() : "";
+  } catch (e) {
+    matching.value = [];
+    matchingHint.value = e?.message
+      ? `Не удалось загрузить совпадения: ${e.message}`
+      : "Не удалось загрузить совпадения. Проверьте, что сервер запущен и вы вошли в аккаунт.";
+  }
+}
+
+async function toggleProjectShare(project, event) {
+  event?.stopPropagation?.();
+  const next = !(project.shareForMatching === true);
+  try {
+    await projectsApi.updateProjectShareForMatching(project.id, next);
+    await tree.refreshProjects();
+    if (tree.currentProjectId === project.id) {
+      tree.shareForMatching = next;
+    }
+    await loadMatching();
+  } catch (e) {
+    matchingHint.value = `Не удалось сохранить участие в подборе: ${e?.message || String(e)}`.trim();
+  }
 }
 
 function cancelDelete() {
@@ -434,16 +479,6 @@ function confirmDelete() {
     return;
   }
   tree.confirmLinkDelete();
-}
-
-async function onShareForMatchingChange(event) {
-  const checked = event?.target?.checked === true;
-  try {
-    await tree.setShareForMatching(checked);
-  } catch (e) {
-    // state is reverted in store on failure
-    console.error("Failed to save share-for-matching flag", e);
-  }
 }
 
 </script>

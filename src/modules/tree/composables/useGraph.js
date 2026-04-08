@@ -1,4 +1,4 @@
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 const CARD_W = 232;
 const CARD_H = 204;
@@ -43,8 +43,38 @@ function sideCenterPoints(a, b) {
 export function useGraph(store) {
   const pendingPort = ref(null);
   const pendingUnion = ref(null);
+  const layoutVersion = ref(0);
+  let rafA = 0;
+  let rafB = 0;
+
+  function bumpLayoutVersion() {
+    layoutVersion.value += 1;
+  }
+
+  function scheduleInitialLayoutRecalc() {
+    if (rafA) cancelAnimationFrame(rafA);
+    if (rafB) cancelAnimationFrame(rafB);
+    // Двойной RAF: даём браузеру завершить layout/paint карточек после гидрации проекта.
+    rafA = requestAnimationFrame(() => {
+      bumpLayoutVersion();
+      rafB = requestAnimationFrame(() => {
+        bumpLayoutVersion();
+      });
+    });
+  }
+
+  onMounted(() => {
+    scheduleInitialLayoutRecalc();
+  });
+
+  onBeforeUnmount(() => {
+    if (rafA) cancelAnimationFrame(rafA);
+    if (rafB) cancelAnimationFrame(rafB);
+  });
 
   const unionNodes = computed(() => {
+    const _layout = layoutVersion.value;
+    void _layout;
     const byId = new Map(store.cards.map((c) => [c.id, c]));
     const unions = [];
     for (const link of store.links) {
@@ -67,6 +97,8 @@ export function useGraph(store) {
   });
 
   const linksPath = computed(() => {
+    const _layout = layoutVersion.value;
+    void _layout;
     const byId = new Map(store.cards.map((c) => [c.id, c]));
     const out = [];
     for (const link of store.links) {

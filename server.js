@@ -292,6 +292,27 @@ function normalizeText(v) {
     .trim();
 }
 
+/** Даты в разных форматах (1990-01-01 vs 01.01.1990) → один ключ для индекса и сравнения. */
+function normalizeBirthForMatch(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) {
+    return `${iso[1]}-${String(iso[2]).padStart(2, "0")}-${String(iso[3]).padStart(2, "0")}`;
+  }
+  const dmy = s.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})$/);
+  if (dmy) {
+    const dd = String(dmy[1]).padStart(2, "0");
+    const mm = String(dmy[2]).padStart(2, "0");
+    return `${dmy[3]}-${mm}-${dd}`;
+  }
+  const ym = s.match(/^(\d{4})-(\d{1,2})$/);
+  if (ym) return `${ym[1]}-${String(ym[2]).padStart(2, "0")}-01`;
+  const y = s.match(/^(\d{4})$/);
+  if (y) return y[1];
+  return normalizeText(s);
+}
+
 function ensureSystemUserAndBackfillProjects() {
   const now = Date.now();
   const sys = db.prepare("SELECT id FROM users WHERE uid = ?").get(SYSTEM_UID);
@@ -309,6 +330,12 @@ function ensureSystemUserAndBackfillProjects() {
   db.prepare("UPDATE projects SET owner_user_id = ? WHERE owner_user_id IS NULL").run(systemUserId);
 }
 ensureSystemUserAndBackfillProjects();
+
+/** Пользователи в БД, кроме системного (uid = SYSTEM_UID). */
+function countRegisteredHumanUsers() {
+  const row = db.prepare(`SELECT COUNT(*) AS c FROM users WHERE uid <> ?`).get(SYSTEM_UID);
+  return Number(row?.c) || 0;
+}
 
 function nextUid() {
   const row = db.prepare("SELECT MAX(uid) AS max_uid FROM users").get();
@@ -330,7 +357,10 @@ function authOptional(req, _res, next) {
   }
   try {
     const payload = jwt.verify(m[1], JWT_SECRET);
-    const user = db.prepare("SELECT id, uid, full_name, birth_date, birth_place, created_at FROM users WHERE id = ?").get(payload.sub);
+    const sub = Number(payload.sub);
+    const user = db
+      .prepare("SELECT id, uid, full_name, birth_date, birth_place, created_at FROM users WHERE id = ?")
+      .get(Number.isFinite(sub) ? sub : payload.sub);
     req.user = user || null;
   } catch {
     req.user = null;
@@ -346,22 +376,195 @@ function requireAuth(req, res, next) {
   next();
 }
 
+/** «Сильное» совпадение; ниже попадает в список как weak (всё равно показываем). */
+const MIN_MATCH_SCORE = 10;
+
+function placeTokensSet(placeNorm) {
+  return new Set(
+    String(placeNorm || "")
+      .split(" ")
+      .filter((t) => t.length >= 3)
+  );
+}
+
 function scoreCardMatch(a, b) {
   let score = 0;
-  if (a.birth_norm && b.birth_norm && a.birth_norm === b.birth_norm) score += 35;
-  if (a.birth_place_norm && b.birth_place_norm && a.birth_place_norm === b.birth_place_norm) score += 25;
+  const bnA = String(a.birth_norm || "");
+  const bnB = String(b.birth_norm || "");
+
+  if (bnA && bnB && bnA === bnB) {
+    score += 35;
+  } else if (bnA.length >= 4 && bnB.length >= 4) {
+    const yA = bnA.slice(0, 4);
+    const yB = bnB.slice(0, 4);
+    if (/^\d{4}$/.test(yA) && yA === yB) {
+      score += 22;
+    }
+  }
+
+  const plA = String(a.birth_place_norm || "");
+  const plB = String(b.birth_place_norm || "");
+  if (plA && plB && plA === plB) {
+    score += 25;
+  } else if (plA && plB && plA !== plB) {
+    const sa = placeTokensSet(plA);
+    const sb = placeTokensSet(plB);
+    let pl = 0;
+    for (const t of sa) if (sb.has(t)) pl += 1;
+    if (pl > 0) score += Math.min(22, pl * 7);
+  }
+
   if (a.gender && b.gender && a.gender === b.gender) score += 10;
-  const at = new Set(a.fio_norm.split(" ").filter(Boolean));
-  const bt = new Set(b.fio_norm.split(" ").filter(Boolean));
+
+  const at = new Set(String(a.fio_norm || "").split(" ").filter(Boolean));
+  const bt = new Set(String(b.fio_norm || "").split(" ").filter(Boolean));
   let overlap = 0;
   for (const t of at) if (bt.has(t)) overlap += 1;
-  score += Math.min(30, overlap * 10);
+  score += Math.min(36, overlap * 12);
+
+  if (overlap === 0) {
+    const ar = String(a.fio_norm || "")
+      .split(" ")
+      .filter((t) => t.length >= 4);
+    const br = String(b.fio_norm || "")
+      .split(" ")
+      .filter((t) => t.length >= 4);
+    outer: for (const x of ar) {
+      for (const y of br) {
+        if (x === y) continue;
+        if (x.startsWith(y) || y.startsWith(x)) {
+          score += 14;
+          break outer;
+        }
+      }
+    }
+  }
+
+  if (overlap === 0) {
+    const w1 = String(a.fio_norm || "")
+      .split(" ")
+      .filter(Boolean)[0];
+    const w2 = String(b.fio_norm || "")
+      .split(" ")
+      .filter(Boolean)[0];
+    if (w1 && w2 && w1.length >= 3 && w2.length >= 3 && w1.slice(0, 3) === w2.slice(0, 3)) {
+      score += 12;
+    }
+  }
+
+  if (overlap === 0) {
+    const ta = String(a.fio_norm || "")
+      .split(" ")
+      .filter((t) => t.length >= 3 && t.length <= 5);
+    const tb = String(b.fio_norm || "")
+      .split(" ")
+      .filter((t) => t.length >= 3 && t.length <= 5);
+    inner: for (const x of ta) {
+      for (const y of tb) {
+        if (x === y) continue;
+        if (x.startsWith(y) || y.startsWith(x)) {
+          score += 5;
+          break inner;
+        }
+      }
+    }
+  }
+
   return score;
 }
 
+/** Базовый фильтр кандидатов: допускаем пары только при полном/частичном совпадении ФИО. */
+function fioLooksMatching(a, b) {
+  const sa = String(a?.fio_norm || "").trim();
+  const sb = String(b?.fio_norm || "").trim();
+  if (!sa || !sb) return false;
+
+  // Полное совпадение.
+  if (sa === sb) return true;
+
+  // Частичное совпадение: один вариант ФИО является началом другого по словам
+  // (например, "александрова алена" vs "александрова алена димитриевна").
+  const ta = sa.split(" ").filter(Boolean);
+  const tb = sb.split(" ").filter(Boolean);
+  if (ta.length < 2 || tb.length < 2) return false;
+
+  const min = Math.min(ta.length, tb.length);
+  let samePrefixTokens = 0;
+  for (let i = 0; i < min; i += 1) {
+    if (ta[i] !== tb[i]) break;
+    samePrefixTokens += 1;
+  }
+
+  // Требуем как минимум совпадение фамилии+имени в правильном порядке.
+  return samePrefixTokens >= 2;
+}
+
+/** SQLite может отдавать NULL; пустая строка не считается данными для сравнения. */
+function indexedRowHasComparableData(row) {
+  const nz = (x) => x != null && String(x).trim() !== "";
+  return nz(row.fio_norm) || nz(row.birth_norm) || nz(row.birth_place_norm);
+}
+
+/** Одна карточка из JSON проекта — тот же формат полей, что и строка shared_card_index (для scoreCardMatch). */
+function cardJsonToMatchRow(ownerUserId, projectId, card) {
+  if (!card) return null;
+  const fio = normalizeText(card.fio || "");
+  const birth = normalizeBirthForMatch(card.birth || "");
+  const place = normalizeText(card.birthPlace || "");
+  if (!fio && !birth && !place) return null;
+  return {
+    owner_user_id: Number(ownerUserId),
+    project_id: Number(projectId),
+    card_id: String(card.id || ""),
+    fio_norm: fio,
+    birth_norm: birth,
+    birth_place_norm: place,
+    gender: String(card.gender || ""),
+    payload_json: JSON.stringify({
+      fio: String(card.fio || ""),
+      birth: String(card.birth || ""),
+      birthPlace: String(card.birthPlace || ""),
+      gender: String(card.gender || ""),
+    }),
+  };
+}
+
+/**
+ * Пул карточек для подбора: все проекты с включённым участием в поиске.
+ * Рекомендации считаются отсюда (актуальные данные), а не только из shared_card_index.
+ */
+function loadMatchRowsFromSharingProjects() {
+  const projectRows = db
+    .prepare(
+      `SELECT id, owner_user_id, cards_json FROM projects
+       WHERE owner_user_id IS NOT NULL AND COALESCE(share_for_matching, 0) = 1`
+    )
+    .all();
+  const out = [];
+  for (const pr of projectRows) {
+    let cards = [];
+    try {
+      cards = JSON.parse(pr.cards_json || "[]");
+    } catch {
+      continue;
+    }
+    const oid = Number(pr.owner_user_id);
+    const pid = Number(pr.id);
+    for (const c of cards || []) {
+      const mr = cardJsonToMatchRow(oid, pid, c);
+      if (mr) out.push(mr);
+    }
+  }
+  return out;
+}
+
 function updateSharedCardIndex(ownerUserId, projectId, cards, shareForMatching) {
-  db.prepare("DELETE FROM shared_card_index WHERE owner_user_id = ? AND project_id = ?").run(ownerUserId, projectId);
-  if (shareForMatching !== true) return;
+  db
+    .prepare("DELETE FROM shared_card_index WHERE owner_user_id = ? AND project_id = ?")
+    .run(Number(ownerUserId), projectId);
+  const sharingOn =
+    shareForMatching === true || shareForMatching === 1 || shareForMatching === "true";
+  if (!sharingOn) return;
   const now = Date.now();
   const insert = db.prepare(
     `INSERT INTO shared_card_index
@@ -371,11 +574,11 @@ function updateSharedCardIndex(ownerUserId, projectId, cards, shareForMatching) 
   for (const card of cards || []) {
     if (!card) continue;
     const fio = normalizeText(card.fio || "");
-    const birth = normalizeText(card.birth || "");
+    const birth = normalizeBirthForMatch(card.birth || "");
     const place = normalizeText(card.birthPlace || "");
     if (!fio && !birth && !place) continue;
     insert.run(
-      ownerUserId,
+      Number(ownerUserId),
       projectId,
       String(card.id || ""),
       fio,
@@ -391,6 +594,26 @@ function updateSharedCardIndex(ownerUserId, projectId, cards, shareForMatching) 
       now,
       now
     );
+  }
+}
+
+/** Пересобирает индекс из карточек проектов (нужно после смены нормализации дат и для починки рассинхрона). */
+function rebuildAllSharedCardIndexes() {
+  db.prepare("DELETE FROM shared_card_index").run();
+  const rows = db
+    .prepare(
+      "SELECT id, owner_user_id, cards_json, COALESCE(share_for_matching, 0) AS sm FROM projects WHERE owner_user_id IS NOT NULL"
+    )
+    .all();
+  for (const row of rows) {
+    let cards = [];
+    try {
+      cards = JSON.parse(row.cards_json || "[]");
+    } catch {
+      continue;
+    }
+    const shareForMatching = Number(row.sm) === 1;
+    updateSharedCardIndex(row.owner_user_id, row.id, cards, shareForMatching);
   }
 }
 
@@ -531,19 +754,82 @@ api.get("/places/suggest", async (req, res) => {
   }
 });
 
+/** Только флаг участия в подборе — без полного PUT (избегает гонок и перезаписи полей). */
+function handleShareForMatchingUpdate(req, res) {
+  const id = +req.params.id;
+  const ownerId = Number(req.user.id);
+  const row = db.prepare("SELECT * FROM projects WHERE id = ? AND owner_user_id = ?").get(id, ownerId);
+  if (!row) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  const b = req.body || {};
+  const shareForMatching = b.shareForMatching === true || b.shareForMatching === "true";
+  let prevProfile = null;
+  try {
+    prevProfile = row.profile_json ? JSON.parse(row.profile_json) : null;
+  } catch {
+    prevProfile = null;
+  }
+  const nextProfile = { ...(prevProfile || {}), shareForMatching };
+  const now = Date.now();
+  db.prepare("UPDATE projects SET profile_json = ?, updated_at = ?, share_for_matching = ? WHERE id = ?").run(
+    JSON.stringify(nextProfile),
+    now,
+    shareForMatching ? 1 : 0,
+    id
+  );
+
+  let cards = [];
+  try {
+    cards = JSON.parse(row.cards_json || "[]");
+  } catch {
+    cards = [];
+  }
+  updateSharedCardIndex(ownerId, id, cards, shareForMatching);
+
+  res.json({ ok: true, id, updated_at: now, shareForMatching });
+}
+
 api.get("/projects", requireAuth, (req, res) => {
   try {
+    const ownerId = Number(req.user.id);
     const rows = db
-      .prepare("SELECT id, name, updated_at FROM projects WHERE owner_user_id = ? ORDER BY updated_at DESC")
-      .all(req.user.id);
-    res.json(rows);
+      .prepare(
+        `SELECT id, name, updated_at, COALESCE(share_for_matching, 0) AS share_for_matching, profile_json
+         FROM projects WHERE owner_user_id = ? ORDER BY updated_at DESC`
+      )
+      .all(ownerId);
+    const out = rows.map((row) => {
+      let profile = null;
+      try {
+        profile = row.profile_json ? JSON.parse(row.profile_json) : null;
+      } catch {
+        profile = null;
+      }
+      const shareForMatching = !!(
+        Number(row.share_for_matching) === 1 || profile?.shareForMatching === true
+      );
+      return {
+        id: row.id,
+        name: row.name,
+        updated_at: row.updated_at,
+        shareForMatching,
+      };
+    });
+    res.json(out);
   } catch (e) {
     res.status(500).json({ error: String(e.message) });
   }
 });
 
+api.post("/projects/:id/share-for-matching", requireAuth, handleShareForMatchingUpdate);
+api.patch("/projects/:id/share-for-matching", requireAuth, handleShareForMatchingUpdate);
+api.put("/projects/:id/share-for-matching", requireAuth, handleShareForMatchingUpdate);
+
 api.get("/projects/:id", requireAuth, (req, res) => {
   const id = +req.params.id;
+  const ownerId = Number(req.user.id);
   const row = db
     .prepare(
       `SELECT id, name, updated_at, field_w, field_h, cam_x, cam_y, zoom,
@@ -551,7 +837,7 @@ api.get("/projects/:id", requireAuth, (req, res) => {
               COALESCE(share_for_matching, 0) AS share_for_matching
        FROM projects WHERE id = ? AND owner_user_id = ?`
     )
-    .get(id, req.user.id);
+    .get(id, ownerId);
   if (!row) {
     res.status(404).json({ error: "not found" });
     return;
@@ -594,45 +880,6 @@ api.get("/projects/:id", requireAuth, (req, res) => {
     links,
   });
 });
-
-/** Только флаг участия в подборе — без полного PUT (избегает гонок и перезаписи полей). */
-function handleShareForMatchingUpdate(req, res) {
-  const id = +req.params.id;
-  const row = db.prepare("SELECT * FROM projects WHERE id = ? AND owner_user_id = ?").get(id, req.user.id);
-  if (!row) {
-    res.status(404).json({ error: "not found" });
-    return;
-  }
-  const b = req.body || {};
-  const shareForMatching = b.shareForMatching === true || b.shareForMatching === "true";
-  let prevProfile = null;
-  try {
-    prevProfile = row.profile_json ? JSON.parse(row.profile_json) : null;
-  } catch {
-    prevProfile = null;
-  }
-  const nextProfile = { ...(prevProfile || {}), shareForMatching };
-  const now = Date.now();
-  db.prepare("UPDATE projects SET profile_json = ?, updated_at = ?, share_for_matching = ? WHERE id = ?").run(
-    JSON.stringify(nextProfile),
-    now,
-    shareForMatching ? 1 : 0,
-    id
-  );
-
-  let cards = [];
-  try {
-    cards = JSON.parse(row.cards_json || "[]");
-  } catch {
-    cards = [];
-  }
-  updateSharedCardIndex(req.user.id, id, cards, shareForMatching);
-
-  res.json({ ok: true, id, updated_at: now, shareForMatching });
-}
-
-api.patch("/projects/:id/share-for-matching", requireAuth, handleShareForMatchingUpdate);
-api.post("/projects/:id/share-for-matching", requireAuth, handleShareForMatchingUpdate);
 
 api.post("/projects", requireAuth, (req, res) => {
   const name = String(req.body?.name ?? "Без названия").trim().slice(0, 200) || "Без названия";
@@ -721,49 +968,170 @@ api.delete("/projects/:id", requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+function handleMatchingRebuild(_req, res) {
+  try {
+    rebuildAllSharedCardIndexes();
+    const total = db.prepare("SELECT COUNT(*) AS c FROM shared_card_index").get();
+    const owners = db.prepare("SELECT COUNT(DISTINCT owner_user_id) AS c FROM shared_card_index").get();
+    res.json({ ok: true, indexedRows: total.c, distinctOwners: owners.c });
+  } catch (e) {
+    res.status(500).json({ error: String(e.message) });
+  }
+}
+
+api.get("/matching/rebuild", requireAuth, handleMatchingRebuild);
+api.post("/matching/rebuild", requireAuth, handleMatchingRebuild);
+
 api.get("/matching/suggestions", requireAuth, (req, res) => {
-  const mine = db
+  const myOwnerId = Number(req.user.id);
+  const registeredUsersCount = countRegisteredHumanUsers();
+  const pool = loadMatchRowsFromSharingProjects();
+  const mine = pool.filter((r) => r.owner_user_id === myOwnerId);
+  const allOthers = pool.filter((r) => r.owner_user_id !== myOwnerId);
+
+  const distinctOtherOwnerIds = [...new Set((allOthers || []).map((r) => r.owner_user_id))];
+  const publicUidByOwnerId = new Map();
+  const selPublicUid = db.prepare("SELECT uid FROM users WHERE id = ?");
+  for (const oid of distinctOtherOwnerIds) {
+    const idNum = Number(oid);
+    const row = selPublicUid.get(idNum);
+    if (row) publicUidByOwnerId.set(idNum, row.uid);
+  }
+
+  const sharingOwnersCount = new Set(pool.map((r) => r.owner_user_id)).size;
+  const myProjectsSharing = db
     .prepare(
-      `SELECT * FROM shared_card_index
-       WHERE owner_user_id = ?`
+      `SELECT COUNT(*) AS c FROM projects WHERE owner_user_id = ? AND COALESCE(share_for_matching, 0) = 1`
     )
-    .all(req.user.id);
+    .get(myOwnerId);
+  const mySharingProjectCount = Number(myProjectsSharing?.c) || 0;
+
+  const baseMeta = {
+    matchSource: "sharing_projects_live",
+    registeredUsersCount,
+    sharingOwnersCount,
+    indexedMine: mine.length,
+    indexedOthers: allOthers.length,
+    totalRowsInIndex: pool.length,
+    distinctOwnersInIndex: sharingOwnersCount,
+    myProjectsWithSharingOn: mySharingProjectCount,
+    minScore: MIN_MATCH_SCORE,
+  };
+
   if (mine.length === 0) {
-    res.json([]);
+    const blockingReason = mySharingProjectCount === 0 ? "no_sharing_projects" : "no_own_cards_in_pool";
+    res.json({
+      suggestions: [],
+      meta: {
+        ...baseMeta,
+        blockingReason,
+        reason: "no_own_cards_in_index",
+        hint:
+          mySharingProjectCount > 0
+            ? "В проектах с включённым «Участвовать в поиске» нет ваших карточек с заполненными ФИО, датой или местом. Добавьте данные на карточках и сохраните проект."
+            : "Включите участие в подборе хотя бы у одного проекта (профиль или статистика дерева), затем сохраните проект и заполните хотя бы ФИО, дату или место у карточек.",
+      },
+    });
     return;
   }
-  const allOthers = db
-    .prepare(
-      `SELECT * FROM shared_card_index
-       WHERE owner_user_id <> ?`
-    )
-    .all(req.user.id);
 
-  const scored = [];
+  if (allOthers.length === 0) {
+    const blockingReason = registeredUsersCount < 2 ? "only_one_user_in_db" : "no_others_in_pool";
+    res.json({
+      suggestions: [],
+      meta: {
+        ...baseMeta,
+        blockingReason,
+        reason: "no_other_users_in_index",
+        hint:
+          registeredUsersCount < 2
+            ? "В базе только один пользователь. Подбор — между разными UID: зарегистрируйте второй аккаунт, включите «Участвовать в поиске» у его проекта и заполните карточки."
+            : "Другие пользователи есть, но в пуле подбора нет чужих карточек: у них должно быть включено участие и заполнены ФИО, дата или место.",
+      },
+    });
+    return;
+  }
+
+  let maxScoreSeen = 0;
+  let pairsCompared = 0;
+  const raw = [];
   for (const m of mine) {
     for (const o of allOthers) {
-      if (!m.fio_norm && !m.birth_norm && !m.birth_place_norm) continue;
-      if (!o.fio_norm && !o.birth_norm && !o.birth_place_norm) continue;
+      if (!indexedRowHasComparableData(m) || !indexedRowHasComparableData(o)) continue;
+      if (!fioLooksMatching(m, o)) continue;
+      pairsCompared += 1;
       const score = scoreCardMatch(m, o);
-      if (score < 40) continue;
-      scored.push({
-        score,
-        mine: {
-          projectId: m.project_id,
-          cardId: m.card_id,
-          ...JSON.parse(m.payload_json || "{}"),
-        },
-        other: {
-          ownerUserId: o.owner_user_id,
-          projectId: o.project_id,
-          cardId: o.card_id,
-          ...JSON.parse(o.payload_json || "{}"),
-        },
-      });
+      if (score > maxScoreSeen) maxScoreSeen = score;
+      raw.push({ score, m, o });
     }
   }
-  scored.sort((a, b) => b.score - a.score);
-  res.json(scored.slice(0, 30));
+  raw.sort((a, b) => b.score - a.score);
+
+  const pairKey = (e) =>
+    `${e.m.owner_user_id}|${e.m.project_id}|${e.m.card_id}|${e.o.owner_user_id}|${e.o.project_id}|${e.o.card_id}`;
+  const seen = new Set();
+  const deduped = [];
+  for (const e of raw) {
+    const k = pairKey(e);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    deduped.push(e);
+  }
+
+  function toSuggestion(entry, weak) {
+    const { m, o, score } = entry;
+    return {
+      score,
+      weak: !!weak,
+      mine: {
+        projectId: m.project_id,
+        cardId: m.card_id,
+        ...JSON.parse(m.payload_json || "{}"),
+      },
+      other: {
+        ownerUserId: o.owner_user_id,
+        ownerUid: publicUidByOwnerId.get(Number(o.owner_user_id)) ?? null,
+        projectId: o.project_id,
+        cardId: o.card_id,
+        ...JSON.parse(o.payload_json || "{}"),
+      },
+    };
+  }
+
+  const strong = deduped.filter((x) => x.score >= MIN_MATCH_SCORE).slice(0, 24);
+  const weak = deduped.filter((x) => x.score > 0 && x.score < MIN_MATCH_SCORE).slice(0, 18);
+  const suggestions = [...strong.map((e) => toSuggestion(e, false)), ...weak.map((e) => toSuggestion(e, true))].slice(
+    0,
+    30
+  );
+
+  let hintNoHits = null;
+  let blockingReason = "ok";
+  if (suggestions.length === 0) {
+    if (pairsCompared === 0) {
+      blockingReason = "no_comparable_pairs";
+      hintNoHits =
+        "Нет пар, где у обеих карточек есть хотя бы одно из полей: ФИО, дата или место — проверьте данные у себя и у другого участника.";
+    } else if (maxScoreSeen > 0) {
+      blockingReason = "below_threshold";
+      hintNoHits = `Сравнено пар: ${pairsCompared}. Лучший балл: ${maxScoreSeen} (порог «сильного» ${MIN_MATCH_SCORE}). Добавьте общие данные или более похожие ФИО.`;
+    } else {
+      blockingReason = "below_threshold";
+      hintNoHits = `Сравнено пар: ${pairsCompared}, но балл у всех 0 — проверьте ФИО, дату и место на карточках.`;
+    }
+  }
+
+  res.json({
+    suggestions,
+    meta: {
+      ...baseMeta,
+      maxScoreSeen,
+      pairsCompared,
+      blockingReason,
+      reason: suggestions.length === 0 ? blockingReason : "ok",
+      hint: suggestions.length === 0 ? hintNoHits : null,
+    },
+  });
 });
 
 app.use("/api", api);
@@ -775,6 +1143,8 @@ app.get("*", (req, res, next) => {
   }
   res.sendFile(path.join(CLIENT_ROOT, "index.html"));
 });
+
+rebuildAllSharedCardIndexes();
 
 const PORT = process.env.PORT || 3456;
 app.listen(PORT, () => {

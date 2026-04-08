@@ -13,7 +13,15 @@ export const authApi = {
   logout() {
     return sendJson("/api/auth/logout", "POST", {});
   },
-  matchingSuggestions() {
-    return getJson("/api/matching/suggestions");
+  /** Список пар + meta.hint (почему пусто). Старый формат — массив — тоже поддерживается. */
+  async matchingSuggestions() {
+    const data = await getJson("/api/matching/suggestions");
+    if (Array.isArray(data)) {
+      return { suggestions: data, meta: {} };
+    }
+    return {
+      suggestions: data.suggestions || [],
+      meta: data.meta || {},
+    };
   },
 };

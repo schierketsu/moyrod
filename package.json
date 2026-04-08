@@ -6,6 +6,7 @@
     "start": "node server.js",
     "server": "node server.js",
     "dev": "concurrently \"npm run server\" \"vite\"",
+    "seed:matching": "node scripts/seed-matching-demo.js",
     "build": "vite build",
     "preview": "vite preview"
   },

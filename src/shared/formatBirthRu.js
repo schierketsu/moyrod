@@ -31,7 +31,7 @@ const MONTHS_NOM = [
 ];
 
 /**
- * Форматирует сохранённое значение даты (YYYY-MM-DD, YYYY-MM или YYYY) для отображения.
+ * Форматирует сохранённое значение даты (YYYY-MM-DD, YYYY-MM, YYYY или MM-DD) для отображения.
  * Пример полной даты: «5 июля 2004 года».
  */
 export function formatBirthDateRu(raw) {
@@ -64,6 +64,15 @@ export function formatBirthDateRu(raw) {
   if (m) {
     const y = parseInt(m[1], 10);
     if (y > 0) return `${y} год`;
+  }
+
+  m = s.match(/^(\d{2})-(\d{2})$/);
+  if (m) {
+    const mo = parseInt(m[1], 10);
+    const d = parseInt(m[2], 10);
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+      return `${d} ${MONTHS_GEN[mo - 1]}`;
+    }
   }
 
   return s;

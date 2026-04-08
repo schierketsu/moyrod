@@ -11,10 +11,10 @@
       ref="viewportRef"
       class="viewport"
       @wheel="onWheel"
-      @pointerdown="onPointerDown"
-      @pointermove="onPointerMove"
-      @pointerup="onPointerUp"
-      @pointercancel="onPointerUp"
+      @pointerdown="onViewportPointerDown"
+      @pointermove="onViewportPointerMove"
+      @pointerup="onViewportPointerUp"
+      @pointercancel="onViewportPointerUp"
     >
       <div class="map-world" :style="{ ...worldStyle, width: `${store.fieldW}px`, height: `${store.fieldH}px` }">
         <svg class="lines-layer" :width="store.fieldW" :height="store.fieldH" aria-hidden="true">
@@ -32,9 +32,11 @@
             :class="{
               'family-card--self': isSelfCard(card.id),
               'family-card--pinned': card.pinned,
-              'family-card--unknown': card.isUnknown
+              'family-card--unknown': card.isUnknown,
+              'family-card--selected': isCardSelected(card.id)
             }"
             :style="cardStyle(card)"
+            @pointerdown="onCardPointerDown($event, card.id)"
           >
             <button class="card-port card-port--top" type="button" @pointerdown.stop="portDown(card.id, 'top')" />
             <button class="card-port card-port--left" type="button" @pointerdown.stop="portDown(card.id, 'left')" />
@@ -62,7 +64,11 @@
                   <div class="card-field card-field--fio">
                     <span class="card-field-label">ФИО</span>
                     <div class="card-fio-lines" :class="{ 'card-field-value--uncertain': card.uncertainFio }">
-                      <span v-for="(line, idx) in splitFioLines(card.fio)" :key="`${card.id}-fio-${idx}`" class="card-fio-line">{{ line }}</span>
+                      <span
+                        v-for="(line, idx) in splitFioLines(withMaidenName(card))"
+                        :key="`${card.id}-fio-${idx}`"
+                        class="card-fio-line"
+                      >{{ line }}</span>
                     </div>
                   </div>
                   <div class="card-field">
@@ -112,6 +118,16 @@
             @pointerdown.stop.prevent="armUnion(u.a, u.b)"
           ></button>
         </div>
+        <div
+          v-if="selectionBox.active"
+          class="selection-box"
+          :style="{
+            left: `${selectionBox.left}px`,
+            top: `${selectionBox.top}px`,
+            width: `${selectionBox.width}px`,
+            height: `${selectionBox.height}px`
+          }"
+        ></div>
       </div>
       <div class="map-zoom-tools" role="group" aria-label="Масштаб карты">
         <button type="button" class="map-zoom-btn" title="Приблизить" aria-label="Приблизить" @click="zoomBy(1.15)">+</button>
@@ -189,7 +205,18 @@
               <span>Место рождения</span>
               <span class="field-uncertain-toggle"><input v-model="store.newCardDraft.uncertainBirthPlace" type="checkbox" aria-label="Место рождения требует проверки" /></span>
             </label>
-            <input v-model="store.newCardDraft.birthPlace" type="text" />
+            <input v-model="store.newCardDraft.birthPlace" type="text" @input="onNewBirthPlaceInput" />
+            <div v-if="newPlaceSuggestions.length" class="autocomplete-dropdown">
+              <button
+                v-for="item in newPlaceSuggestions"
+                :key="item.value"
+                type="button"
+                class="autocomplete-item"
+                @click="pickNewBirthPlace(item.value)"
+              >
+                {{ item.value }}
+              </button>
+            </div>
           </div>
           <div class="side-panel-field side-panel-field--gender">
             <span class="side-panel-field-legend">Пол</span>
@@ -330,16 +357,50 @@ const router = useRouter();
 function goMyProfile() {
   router.push("/myprofile");
 }
-const { viewportRef, worldStyle, zoomBy, onWheel, onPointerDown, onPointerMove, onPointerUp, fieldCoordsFromClient } =
+const {
+  viewportRef,
+  worldStyle,
+  zoomBy,
+  onWheel,
+  onPointerDown: onViewportPanPointerDown,
+  onPointerMove: onViewportPanPointerMove,
+  onPointerUp: onViewportPanPointerUp,
+  fieldCoordsFromClient,
+} =
   useViewport(store);
+const selectedCardIds = ref([]);
+const selectionBox = reactive({
+  active: false,
+  pointerId: null,
+  startX: 0,
+  startY: 0,
+  left: 0,
+  top: 0,
+  width: 0,
+  height: 0,
+});
+const viewportClickState = reactive({
+  active: false,
+  pointerId: null,
+  moved: false,
+  startClientX: 0,
+  startClientY: 0,
+});
 const { linksPath, unionNodes, pendingUnion, portDown, armUnion } = useGraph(store);
 const { cardStyle, startDrag, onDragMove, onDragEnd, addCardFromDraft, openEdit, saveEdit, closeNewPanel, closeEditPanel } = useCards(store, {
   fieldCoordsFromClient,
+  getSelectedCardIds: () => [...selectedCardIds.value],
+  isSelected: (id) => selectedCardIds.value.includes(id),
+  selectOnly: (id) => {
+    selectedCardIds.value = id ? [id] : [];
+  },
 });
 const isNewCardEmpty = computed(
   () => !store.newCardDraft.fio && !store.newCardDraft.birth && !store.newCardDraft.birthPlace
 );
+const newPlaceSuggestions = ref([]);
 const editPlaceSuggestions = ref([]);
+let newSuggestTimer = null;
 let editSuggestTimer = null;
 
 const birthMonthOptions = BIRTH_MONTH_OPTIONS;
@@ -395,10 +456,146 @@ function splitFioLines(fio) {
   return [parts[0], parts.slice(1, -1).join(" "), parts[parts.length - 1]];
 }
 
+function withMaidenName(card) {
+  const fioRaw = String(card?.fio || "").trim();
+  const maiden = String(card?.maidenName || "").trim();
+  if (!fioRaw || !maiden) return fioRaw;
+  const parts = fioRaw.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return fioRaw;
+  // Показываем девичью фамилию рядом с основной фамилией.
+  parts[0] = `${parts[0]} (${maiden})`;
+  return parts.join(" ");
+}
+
+function isCardSelected(cardId) {
+  return selectedCardIds.value.includes(cardId);
+}
+
+function onCardPointerDown(ev, cardId) {
+  if (ev.button !== 0) return;
+  const toggle = ev.ctrlKey || ev.metaKey;
+  if (toggle) {
+    if (selectedCardIds.value.includes(cardId)) {
+      selectedCardIds.value = selectedCardIds.value.filter((id) => id !== cardId);
+    } else {
+      selectedCardIds.value = [...selectedCardIds.value, cardId];
+    }
+    return;
+  }
+  if (!selectedCardIds.value.includes(cardId) || selectedCardIds.value.length !== 1) {
+    selectedCardIds.value = [cardId];
+  }
+}
+
+function clearSelectionBox() {
+  selectionBox.active = false;
+  selectionBox.pointerId = null;
+  selectionBox.width = 0;
+  selectionBox.height = 0;
+}
+
+function onViewportPointerDown(ev) {
+  const onCard = ev.target.closest(".family-card");
+  if (onCard) return;
+  if (ev.target.closest(".map-zoom-tools")) return;
+  viewportClickState.active = true;
+  viewportClickState.pointerId = ev.pointerId;
+  viewportClickState.moved = false;
+  viewportClickState.startClientX = ev.clientX;
+  viewportClickState.startClientY = ev.clientY;
+  // Обычный drag по пустому месту — панорама карты.
+  // Shift + drag — рамка выделения карточек.
+  const wantsSelectionBox = ev.shiftKey === true;
+  if (!wantsSelectionBox) {
+    onViewportPanPointerDown(ev);
+    return;
+  }
+  if (ev.pointerType === "mouse" && ev.button !== 0) return;
+  const p = fieldCoordsFromClient(ev.clientX, ev.clientY);
+  selectionBox.active = true;
+  selectionBox.pointerId = ev.pointerId;
+  selectionBox.startX = p.x;
+  selectionBox.startY = p.y;
+  selectionBox.left = p.x;
+  selectionBox.top = p.y;
+  selectionBox.width = 0;
+  selectionBox.height = 0;
+}
+
+function onViewportPointerMove(ev) {
+  if (viewportClickState.active && viewportClickState.pointerId === ev.pointerId) {
+    const dx = Math.abs(ev.clientX - viewportClickState.startClientX);
+    const dy = Math.abs(ev.clientY - viewportClickState.startClientY);
+    if (dx > 3 || dy > 3) viewportClickState.moved = true;
+  }
+  if (selectionBox.active && selectionBox.pointerId === ev.pointerId) {
+    const p = fieldCoordsFromClient(ev.clientX, ev.clientY);
+    const left = Math.min(selectionBox.startX, p.x);
+    const right = Math.max(selectionBox.startX, p.x);
+    const top = Math.min(selectionBox.startY, p.y);
+    const bottom = Math.max(selectionBox.startY, p.y);
+    selectionBox.left = left;
+    selectionBox.top = top;
+    selectionBox.width = right - left;
+    selectionBox.height = bottom - top;
+    return;
+  }
+  onViewportPanPointerMove(ev);
+}
+
+function onViewportPointerUp(ev) {
+  if (selectionBox.active && selectionBox.pointerId === ev.pointerId) {
+    const left = selectionBox.left;
+    const top = selectionBox.top;
+    const right = left + selectionBox.width;
+    const bottom = top + selectionBox.height;
+    const minW = 6;
+    const minH = 6;
+    if (selectionBox.width >= minW && selectionBox.height >= minH) {
+      const CARD_W = 232;
+      const CARD_H = 204;
+      const hits = store.cards
+        .filter((c) => c.x < right && c.x + CARD_W > left && c.y < bottom && c.y + CARD_H > top)
+        .map((c) => c.id);
+      selectedCardIds.value = hits;
+    } else if (!ev.ctrlKey && !ev.metaKey) {
+      selectedCardIds.value = [];
+    }
+    clearSelectionBox();
+    viewportClickState.active = false;
+    viewportClickState.pointerId = null;
+    return;
+  }
+  if (viewportClickState.active && viewportClickState.pointerId === ev.pointerId) {
+    if (!viewportClickState.moved && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey) {
+      selectedCardIds.value = [];
+    }
+    viewportClickState.active = false;
+    viewportClickState.pointerId = null;
+  }
+  onViewportPanPointerUp(ev);
+}
+
 function byGender(gender, male, female, neutral) {
   if (gender === "m") return male;
   if (gender === "f") return female;
   return neutral;
+}
+
+function ancestorTitle(gender, up) {
+  if (up <= 0) return "Родственник";
+  if (up === 1) return byGender(gender, "Отец", "Мать", "Родитель");
+  if (up === 2) return byGender(gender, "Дедушка", "Бабушка", "Дедушка/бабушка");
+  const pra = "пра".repeat(Math.max(1, up - 2));
+  return byGender(gender, `${pra}дедушка`, `${pra}бабушка`, `${pra}дедушка/бабушка`);
+}
+
+function descendantTitle(gender, down) {
+  if (down <= 0) return "Родственник";
+  if (down === 1) return byGender(gender, "Сын", "Дочь", "Ребенок");
+  if (down === 2) return byGender(gender, "Внук", "Внучка", "Внук/внучка");
+  const pra = "пра".repeat(Math.max(1, down - 2));
+  return byGender(gender, `${pra}внук`, `${pra}внучка`, `${pra}внук/внучка`);
 }
 
 function buildRelationGraph() {
@@ -449,12 +646,12 @@ function relationTitleByPath(path, targetGender) {
   if (!path || path.length === 0) return "Это вы";
   const sig = path.join(">");
 
-  if (sig === "parent") return byGender(targetGender, "Отец", "Мать", "Родитель");
-  if (sig === "child") return byGender(targetGender, "Сын", "Дочь", "Ребенок");
+  if (sig === "parent") return ancestorTitle(targetGender, 1);
+  if (sig === "child") return descendantTitle(targetGender, 1);
   if (sig === "spouse") return byGender(targetGender, "Муж", "Жена", "Супруг(а)");
 
-  if (sig === "parent>parent") return byGender(targetGender, "Дедушка", "Бабушка", "Дедушка/бабушка");
-  if (sig === "child>child") return byGender(targetGender, "Внук", "Внучка", "Внук/внучка");
+  if (sig === "parent>parent") return ancestorTitle(targetGender, 2);
+  if (sig === "child>child") return descendantTitle(targetGender, 2);
   if (sig === "parent>child") return byGender(targetGender, "Брат", "Сестра", "Брат/сестра");
   if (sig === "spouse>parent") return "Родитель супруга/супруги";
   if (sig === "spouse>child") return "Ребенок супруга/супруги";
@@ -463,8 +660,35 @@ function relationTitleByPath(path, targetGender) {
 
   if (sig === "parent>parent>child") return byGender(targetGender, "Дядя", "Тетя", "Дядя/тетя");
   if (sig === "parent>child>child") return byGender(targetGender, "Племянник", "Племянница", "Племянник/племянница");
-  if (sig === "parent>parent>parent") return byGender(targetGender, "Прадедушка", "Прабабушка", "Прадедушка/прабабушка");
-  if (sig === "child>child>child") return byGender(targetGender, "Правнук", "Правнучка", "Правнук/правнучка");
+  if (sig === "parent>parent>parent") return ancestorTitle(targetGender, 3);
+  if (sig === "child>child>child") return descendantTitle(targetGender, 3);
+
+  const onlyVertical = path.every((r) => r === "parent") || path.every((r) => r === "child");
+  if (onlyVertical) {
+    if (path[0] === "parent") return ancestorTitle(targetGender, path.length);
+    return descendantTitle(targetGender, path.length);
+  }
+
+  // Боковые кровные ветки: N шагов вверх к общему предку, затем M шагов вниз.
+  const up = path.findIndex((r) => r !== "parent");
+  if (up > 0) {
+    const downPart = path.slice(up);
+    const isDownOnly = downPart.length > 0 && downPart.every((r) => r === "child");
+    if (isDownOnly) {
+      const down = downPart.length;
+      if (up === 1 && down === 1) return byGender(targetGender, "Брат", "Сестра", "Брат/сестра");
+      if (up === 2 && down === 1) return byGender(targetGender, "Дядя", "Тетя", "Дядя/тетя");
+      if (up >= 3 && down === 1) {
+        const elder = ancestorTitle("", up - 1).toLowerCase();
+        return `Брат/сестра ${elder}`;
+      }
+      if (up === 1 && down === 2) return byGender(targetGender, "Племянник", "Племянница", "Племянник/племянница");
+      if (up === 2 && down === 2) return byGender(targetGender, "Двоюродный брат", "Двоюродная сестра", "Двоюродный брат/сестра");
+      if (up >= 2 && down >= 2) {
+        return `Дальний родственник по боковой линии (${up} вверх, ${down} вниз)`;
+      }
+    }
+  }
 
   return `Родство: ${path.length} шагов`;
 }
@@ -495,6 +719,23 @@ function onEditBirthPlaceInput() {
   }, 200);
 }
 
+function onNewBirthPlaceInput() {
+  if (newSuggestTimer) clearTimeout(newSuggestTimer);
+  newSuggestTimer = setTimeout(async () => {
+    const q = String(store.newCardDraft.birthPlace || "").trim();
+    if (q.length < 2) {
+      newPlaceSuggestions.value = [];
+      return;
+    }
+    newPlaceSuggestions.value = await projectsApi.suggestPlaces(q);
+  }, 200);
+}
+
+function pickNewBirthPlace(value) {
+  store.newCardDraft.birthPlace = value;
+  newPlaceSuggestions.value = [];
+}
+
 function pickEditBirthPlace(value) {
   store.editDraft.birthPlace = value;
   editPlaceSuggestions.value = [];
@@ -507,6 +748,10 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  clearSelectionBox();
+  viewportClickState.active = false;
+  viewportClickState.pointerId = null;
+  if (newSuggestTimer) clearTimeout(newSuggestTimer);
   if (editSuggestTimer) clearTimeout(editSuggestTimer);
   window.removeEventListener("pointermove", onDragMove);
   window.removeEventListener("pointerup", onDragEnd);
