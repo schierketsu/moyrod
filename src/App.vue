@@ -8,6 +8,23 @@
 
   <div v-else-if="!auth.isAuthenticated" class="welcome-overlay">
     <div class="welcome-panel">
+      <div v-if="inviteRouteToken" class="invite-login-callout">
+        <p v-if="inviteLoginLoading" class="welcome-text">Проверка приглашения…</p>
+        <template v-else-if="inviteLoginPreview">
+          <p class="invite-login-callout-title">Приглашение в проект</p>
+          <p class="welcome-text">
+            Вас пригласили в проект «{{ inviteLoginPreview.projectName }}». Войдите или зарегистрируйтесь, чтобы добавить его в свою коллекцию.
+          </p>
+          <p v-if="inviteLoginPreview.ownerName || inviteLoginPreview.ownerUid" class="welcome-text invite-login-callout-owner">
+            <template v-if="inviteLoginPreview.ownerName">{{ inviteLoginPreview.ownerName }}</template>
+            <template v-if="inviteLoginPreview.ownerUid">
+              <template v-if="inviteLoginPreview.ownerName"> · </template>
+              UID {{ inviteLoginPreview.ownerUid }}
+            </template>
+          </p>
+        </template>
+        <p v-else-if="inviteLoginError" class="welcome-text">{{ inviteLoginError }}</p>
+      </div>
       <h2 class="welcome-title">{{ authMode === "login" ? "Вход" : "Регистрация" }}</h2>
       <form v-if="authMode === 'login'" class="welcome-form" @submit.prevent="submitLogin">
         <div class="welcome-field">
@@ -75,6 +92,9 @@
 
   <template v-else>
     <div class="app-main">
+    <div v-if="shareGraphicBusy" class="export-graphic-overlay" aria-live="polite">
+      <p class="export-graphic-overlay-text">Готовим изображение дерева…</p>
+    </div>
     <div v-if="tree.showWelcome && !auth.isAuthenticated" class="welcome-overlay">
       <div class="welcome-panel">
         <h2 class="welcome-title">Добро пожаловать в «Свои корни»</h2>
@@ -111,22 +131,22 @@
           </div>
         </div>
         <h1 class="logo"><span class="logo-line">свои</span><span class="logo-line">корни</span></h1>
-        <div v-if="route.path !== '/myprofile'" class="toolbar-side toolbar-side--right">
+        <div v-if="route.path !== '/myprofile' && !isInviteRoute" class="toolbar-side toolbar-side--right">
           <div class="toolbar-project-tools">
             <button
               v-if="tree.currentProjectId"
               type="button"
               class="btn toolbar-project-title"
-              @click="tree.showStats = true"
+              @click="onProjectToolbarClick"
             >
-              {{ tree.currentProjectName }}
+              {{ route.path === "/project-stats" ? "К дереву" : tree.currentProjectName }}
             </button>
             <span v-else class="toolbar-no-project">Нет проекта</span>
           </div>
         </div>
       </div>
       <div
-        v-if="tree.pendingLinkDeletePayload || tree.pendingCardDeleteId"
+        v-if="tree.pendingLinkDeletePayload || tree.pendingCardDeleteId || pendingProfileProjectDeleteId != null"
         class="link-delete-banner"
         role="dialog"
         aria-modal="true"
@@ -163,11 +183,7 @@
       </div>
     </header>
 
-    <template v-if="route.path !== '/myprofile'">
-      <TreeWorkspace class="app-tree" />
-    </template>
-
-    <section v-else class="profile-page">
+    <section v-if="route.path === '/myprofile'" class="profile-page">
       <div class="profile-page-main">
         <div class="profile-page-head">
           <h2 class="profile-page-title">Мой профиль</h2>
@@ -202,15 +218,32 @@
             @keydown.enter.prevent="openProject(project.id)"
             @keydown.space.prevent="openProject(project.id)"
           >
-            <button
-              type="button"
-              class="profile-project-delete"
-              aria-label="Удалить проект"
-              title="Удалить проект"
-              @click.stop="deleteProject(project.id)"
-            >
-              <img class="profile-project-delete-icon" src="/icons/garbage.png" width="18" height="18" alt="" />
-            </button>
+            <div class="profile-project-menu-root">
+              <button
+                type="button"
+                class="profile-project-menu-trigger"
+                aria-label="Меню проекта"
+                title="Меню проекта"
+                aria-haspopup="menu"
+                :aria-expanded="profileProjectMenuOpenId === project.id"
+                @click.stop="toggleProfileProjectMenu(project.id)"
+              >
+                <img class="profile-project-menu-icon" src="/icons/menu.png" width="20" height="20" alt="" />
+              </button>
+              <div
+                v-if="profileProjectMenuOpenId === project.id"
+                class="profile-project-menu-dropdown"
+                role="menu"
+                @click.stop
+              >
+                <button type="button" class="profile-project-menu-item" role="menuitem" @click="openProjectParameters(project.id)">
+                  Параметры
+                </button>
+                <button type="button" class="profile-project-menu-item profile-project-menu-item--danger" role="menuitem" @click="deleteProjectFromMenu(project.id)">
+                  Удалить
+                </button>
+              </div>
+            </div>
             <header class="profile-project-top">
               <h3 class="profile-project-name">{{ project.name || "Без названия" }}</h3>
               <p class="profile-project-meta">ID {{ project.id }}</p>
@@ -290,16 +323,98 @@
       </aside>
     </section>
 
-    <div v-if="tree.showStats && tree.currentProjectId" class="stats-overlay" @click.self="tree.showStats = false">
-      <div class="stats-panel" role="dialog" aria-modal="true">
-        <h2 class="stats-title">Статистика проекта</h2>
-        <dl class="stats-dl">
-          <div class="stats-dl-row"><dt>Карточек</dt><dd>{{ tree.cardCount }}</dd></div>
-          <div class="stats-dl-row"><dt>Связей</dt><dd>{{ tree.linkCount }}</dd></div>
-          <div class="stats-dl-row"><dt>Сохранён</dt><dd>{{ formattedSavedAt }}</dd></div>
-        </dl>
+    <section v-else-if="route.path === '/project-stats'" class="profile-page">
+      <div class="profile-page-main">
+        <div class="profile-page-head">
+          <div class="profile-stats-head-top">
+            <div>
+              <h2 class="profile-page-title">Параметры проекта</h2>
+              <p v-if="tree.currentProjectName" class="profile-stats-project-meta">
+                {{ tree.currentProjectName }}
+                <span v-if="tree.currentProjectId" class="profile-stats-project-id"> · ID {{ tree.currentProjectId }}</span>
+              </p>
+            </div>
+          </div>
+        </div>
+        <div class="profile-section project-stats-section">
+          <dl class="stats-dl stats-dl--profile">
+            <div class="stats-dl-row"><dt>Карточек</dt><dd>{{ tree.cardCount }}</dd></div>
+            <div class="stats-dl-row"><dt>Связей</dt><dd>{{ tree.linkCount }}</dd></div>
+            <div class="stats-dl-row"><dt>Сохранён</dt><dd>{{ formattedSavedAt }}</dd></div>
+          </dl>
+        </div>
+        <div v-if="tree.currentProjectId" class="profile-section project-stats-export-image">
+          <h3 class="project-stats-share-title">Поделиться изображением</h3>
+          <p class="welcome-text project-stats-share-hint">
+            Сохраните дерево как PNG в высоком разрешении: удобно отправить в мессенджер или распечатать.
+          </p>
+          <button
+            type="button"
+            class="btn primary project-stats-export-btn"
+            :disabled="shareGraphicBusy || !tree.cards.length"
+            @click="downloadProjectShareGraphic"
+          >
+            {{ shareGraphicBusy ? "Подождите…" : "Поделиться" }}
+          </button>
+          <p v-if="shareGraphicError" class="welcome-text project-stats-share-error">{{ shareGraphicError }}</p>
+        </div>
+        <div v-if="!tree.currentProjectReadOnly && tree.currentProjectId" class="profile-section project-stats-share">
+          <h3 class="project-stats-share-title">Передать проект по ссылке</h3>
+          <p class="welcome-text project-stats-share-hint">
+            Каждая ссылка одноразовая: перестаёт действовать после принятия или отказа. Несколько активных ссылок могут существовать
+            одновременно. Убрать ожидающую ссылку можно только кнопкой «Аннулировать».
+          </p>
+          <button type="button" class="btn primary project-stats-share-create" :disabled="shareInviteBusy" @click="createShareInviteLink">
+            {{ shareInviteBusy ? "Создаём…" : "Создать ссылку-приглашение" }}
+          </button>
+          <div class="project-stats-invites-table-wrap">
+            <table v-if="shareInvitesList.length" class="project-stats-invites-table">
+              <thead>
+                <tr>
+                  <th scope="col">Создана</th>
+                  <th scope="col">Ссылка</th>
+                  <th scope="col">Статус</th>
+                  <th scope="col" class="project-stats-invites-th-actions">Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="row in shareInvitesList" :key="row.token">
+                  <td>{{ formatShareInviteDate(row.createdAt) }}</td>
+                  <td class="project-stats-invites-url-cell">
+                    <span class="project-stats-invites-url" :title="shareInviteFullUrl(row.token)">{{
+                      shareInviteShortUrl(row.token)
+                    }}</span>
+                  </td>
+                  <td>{{ shareInviteStatusLabel(row.status) }}</td>
+                  <td>
+                    <div class="project-stats-invites-actions">
+                      <button type="button" class="btn project-stats-invite-copy-btn" @click="copyShareInviteToken(row.token)">
+                        Копировать
+                      </button>
+                      <button
+                        v-if="row.status === 'pending'"
+                        type="button"
+                        class="btn project-stats-invite-annul-btn"
+                        :disabled="shareInviteAnnulToken === row.token"
+                        @click="annulShareInviteRow(row.token)"
+                      >
+                        {{ shareInviteAnnulToken === row.token ? "…" : "Аннулировать" }}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-else class="welcome-text project-stats-invites-empty">Пока нет созданных ссылок.</p>
+          </div>
+          <p v-if="shareInviteError" class="welcome-text project-stats-share-error">{{ shareInviteError }}</p>
+        </div>
       </div>
-    </div>
+      <aside class="profile-page-side" aria-hidden="true"></aside>
+    </section>
+
+    <ProjectInviteAcceptPage v-else-if="isInviteRoute" />
+    <TreeWorkspace v-else ref="treeWorkspaceRef" class="app-tree" />
     </div>
   </template>
 </template>
@@ -308,6 +423,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import TreeWorkspace from "./modules/tree/components/TreeWorkspace.vue";
+import ProjectInviteAcceptPage from "./modules/invite/ProjectInviteAcceptPage.vue";
 import { useTreeStore } from "./modules/tree/state/treeStore";
 import { useAuthStore } from "./modules/auth/state/authStore";
 import { projectsApi } from "./shared/api/projectsApi";
@@ -318,11 +434,23 @@ const tree = useTreeStore();
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
+const treeWorkspaceRef = ref(null);
+const shareGraphicBusy = ref(false);
+const shareGraphicError = ref("");
 const welcome = reactive({ fio: "", birth: "", birthPlace: "" });
 const authMode = ref("login");
 const authError = ref("");
 const showUserMenu = ref(false);
 const userMenuRoot = ref(null);
+const profileProjectMenuOpenId = ref(null);
+const pendingProfileProjectDeleteId = ref(null);
+watch(
+  () => route.fullPath,
+  () => {
+    profileProjectMenuOpenId.value = null;
+    pendingProfileProjectDeleteId.value = null;
+  }
+);
 const newProjectName = ref("");
 const matching = ref([]);
 const matchingHint = ref("");
@@ -343,6 +471,100 @@ const placeSuggestions = ref([]);
 let suggestTimer = null;
 void auth.bootstrap();
 
+const isInviteRoute = computed(() => route.name === "projectInvite");
+const inviteRouteToken = computed(() =>
+  isInviteRoute.value ? String(route.params.token || "").trim() : ""
+);
+
+const inviteLoginLoading = ref(false);
+const inviteLoginPreview = ref(null);
+const inviteLoginError = ref("");
+
+const shareInviteBusy = ref(false);
+const shareInviteError = ref("");
+const shareInvitesList = ref([]);
+const shareInviteAnnulToken = ref(null);
+
+function shareInviteStatusLabel(status) {
+  const s = String(status || "").toLowerCase();
+  if (s === "pending") return "Ожидает";
+  if (s === "accepted") return "Принял";
+  if (s === "declined") return "Отказано";
+  if (s === "annulled" || s === "revoked") return "Аннулирована";
+  return s || "—";
+}
+
+function shareInviteFullUrl(token) {
+  return `${window.location.origin}/invite/${token}`;
+}
+
+function shareInviteShortUrl(token) {
+  const t = String(token || "");
+  if (t.length <= 14) return shareInviteFullUrl(t);
+  return `${window.location.origin}/invite/${t.slice(0, 10)}…`;
+}
+
+function formatShareInviteDate(createdAt) {
+  const n = Number(createdAt);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  return new Date(n).toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+async function loadShareInviteList() {
+  if (!tree.currentProjectId || tree.currentProjectReadOnly) {
+    shareInvitesList.value = [];
+    return;
+  }
+  try {
+    const data = await projectsApi.listProjectShareInvites(tree.currentProjectId);
+    shareInvitesList.value = Array.isArray(data?.invites) ? data.invites : [];
+  } catch {
+    shareInvitesList.value = [];
+  }
+}
+
+watch(
+  () => [auth.isAuthenticated, inviteRouteToken.value],
+  async () => {
+    if (auth.isAuthenticated || !inviteRouteToken.value || inviteRouteToken.value.length < 16) {
+      inviteLoginPreview.value = null;
+      inviteLoginError.value = "";
+      inviteLoginLoading.value = false;
+      return;
+    }
+    inviteLoginLoading.value = true;
+    inviteLoginError.value = "";
+    inviteLoginPreview.value = null;
+    try {
+      const data = await projectsApi.getShareInviteInfo(inviteRouteToken.value);
+      if (data?.ok) {
+        inviteLoginPreview.value = {
+          projectName: data.projectName || "Проект",
+          ownerUid: data.ownerUid,
+          ownerName: data.ownerName || null,
+        };
+      } else {
+        inviteLoginError.value = "Приглашение недействительно.";
+      }
+    } catch (e) {
+      if (e?.status === 410) {
+        inviteLoginError.value = "Ссылка уже использована или приглашение отклонено.";
+      } else {
+        inviteLoginError.value = "Приглашение не найдено или ссылка устарела.";
+      }
+    } finally {
+      inviteLoginLoading.value = false;
+    }
+  },
+  { immediate: true }
+);
+
 function closeUserMenuOnOutsidePointer(ev) {
   if (!showUserMenu.value) return;
   const root = userMenuRoot.value;
@@ -351,18 +573,40 @@ function closeUserMenuOnOutsidePointer(ev) {
   }
 }
 
+function closeProfileProjectMenuOnOutsidePointer(ev) {
+  if (profileProjectMenuOpenId.value == null) return;
+  const t = ev.target;
+  if (t && typeof t.closest === "function" && t.closest(".profile-project-menu-root")) return;
+  profileProjectMenuOpenId.value = null;
+}
+
+function onGlobalPointerDownCloseMenus(ev) {
+  closeUserMenuOnOutsidePointer(ev);
+  closeProfileProjectMenuOnOutsidePointer(ev);
+}
+
+function toggleProfileProjectMenu(projectId) {
+  profileProjectMenuOpenId.value = profileProjectMenuOpenId.value === projectId ? null : projectId;
+}
+
 onMounted(() => {
-  document.addEventListener("pointerdown", closeUserMenuOnOutsidePointer, true);
+  document.addEventListener("pointerdown", onGlobalPointerDownCloseMenus, true);
 });
 
 onBeforeUnmount(() => {
-  document.removeEventListener("pointerdown", closeUserMenuOnOutsidePointer, true);
+  document.removeEventListener("pointerdown", onGlobalPointerDownCloseMenus, true);
 });
 
 const formattedSavedAt = computed(() =>
   tree.lastProjectUpdatedAt ? new Date(tree.lastProjectUpdatedAt).toLocaleString("ru-RU") : "—"
 );
 const linkDeleteBannerText = computed(() => {
+  const delProjectId = pendingProfileProjectDeleteId.value;
+  if (delProjectId != null) {
+    const proj = tree.projects.find((x) => x.id === delProjectId);
+    const name = String(proj?.name || "").trim() || "этот проект";
+    return `Удалить проект «${name}»?`;
+  }
   if (tree.pendingCardDeleteId) return "Удалить карточку?";
   const p = tree.pendingLinkDeletePayload;
   if (!p) return "";
@@ -396,7 +640,7 @@ watch(
       }
     } else {
       tree.ready = true;
-      if (route.path === "/myprofile") router.replace("/");
+      if (route.path === "/myprofile" || route.path === "/project-stats") router.replace("/");
     }
   },
   { immediate: true }
@@ -410,12 +654,24 @@ watch(
 );
 
 watch(
-  () => route.path,
-  async (path) => {
+  () => [route.path, tree.currentProjectId, tree.currentProjectReadOnly, tree.ready, auth.isAuthenticated],
+  async () => {
+    const path = route.path;
     if (path === "/myprofile" && auth.isAuthenticated) {
       await refreshProfileData();
     }
-  }
+    if (path !== "/project-stats") {
+      shareInviteError.value = "";
+      shareInvitesList.value = [];
+    } else if (auth.isAuthenticated && tree.ready) {
+      await loadShareInviteList();
+    }
+    if (!auth.isAuthenticated || !tree.ready) return;
+    if (path === "/project-stats" && !tree.currentProjectId) {
+      router.replace("/");
+    }
+  },
+  { immediate: true }
 );
 
 async function refreshProfileData() {
@@ -465,6 +721,8 @@ async function submitRegister() {
   }
   try {
     await auth.register({ ...registerForm });
+    const t = inviteRouteToken.value;
+    if (t) await router.replace(`/invite/${t}`);
   } catch (e) {
     authError.value = "Не удалось зарегистрироваться.";
   }
@@ -482,12 +740,72 @@ async function submitLogin() {
 async function logout() {
   await auth.logout();
   showUserMenu.value = false;
-  if (route.path === "/myprofile") router.replace("/");
+  if (route.path === "/myprofile" || route.path === "/project-stats") router.replace("/");
 }
 
 async function openMyProfile() {
   showUserMenu.value = false;
   await router.push("/myprofile");
+}
+
+function onProjectToolbarClick() {
+  if (!tree.currentProjectId) return;
+  if (route.path === "/project-stats") {
+    router.push("/");
+  } else {
+    router.push("/project-stats");
+  }
+}
+
+async function createShareInviteLink() {
+  if (!tree.currentProjectId || tree.currentProjectReadOnly) return;
+  shareInviteBusy.value = true;
+  shareInviteError.value = "";
+  try {
+    const data = await projectsApi.createProjectShareInvite(tree.currentProjectId);
+    const tok = data?.token;
+    if (!tok) {
+      shareInviteError.value = "Не удалось получить ссылку.";
+      return;
+    }
+    await loadShareInviteList();
+    try {
+      await navigator.clipboard.writeText(shareInviteFullUrl(tok));
+    } catch {
+      // таблица всё равно обновлена; копирование по желанию из строки
+    }
+  } catch {
+    shareInviteError.value = "Не удалось создать ссылку. Проверьте, что проект сохранён и вы его владелец.";
+  } finally {
+    shareInviteBusy.value = false;
+  }
+}
+
+async function copyShareInviteToken(token) {
+  const t = String(token || "").trim();
+  if (!t) return;
+  try {
+    await navigator.clipboard.writeText(shareInviteFullUrl(t));
+    shareInviteError.value = "";
+  } catch {
+    shareInviteError.value = "Не удалось скопировать — скопируйте вручную.";
+  }
+}
+
+async function annulShareInviteRow(token) {
+  const t = String(token || "").trim();
+  const pid = tree.currentProjectId;
+  if (!t || !pid || tree.currentProjectReadOnly) return;
+  shareInviteAnnulToken.value = t;
+  shareInviteError.value = "";
+  try {
+    await projectsApi.annulProjectShareInvite(pid, t);
+    await loadShareInviteList();
+  } catch {
+    shareInviteError.value = "Не удалось аннулировать ссылку.";
+  } finally {
+    shareInviteAnnulToken.value = null;
+  }
 }
 
 async function createProject() {
@@ -509,8 +827,82 @@ async function openProject(id) {
   if (route.path === "/myprofile") await router.push("/");
 }
 
+async function openProjectParameters(id) {
+  profileProjectMenuOpenId.value = null;
+  await tree.openProject(id);
+  await router.push("/project-stats");
+}
+
+function deleteProjectFromMenu(id) {
+  profileProjectMenuOpenId.value = null;
+  tree.cancelLinkDelete();
+  tree.cancelCardDelete();
+  pendingProfileProjectDeleteId.value = id;
+}
+
 async function deleteProject(id) {
   await tree.deleteProject(id);
+}
+
+function sanitizeProjectShareFilename(name) {
+  const s = String(name || "project")
+    .trim()
+    .replace(/[/\\?%*:|"<>]/g, "-")
+    .replace(/\s+/g, "-");
+  return s.slice(0, 72) || "project";
+}
+
+async function downloadProjectShareGraphic() {
+  shareGraphicError.value = "";
+  if (!tree.currentProjectId) return;
+  if (!tree.cards.length) {
+    shareGraphicError.value = "В проекте пока нет карточек — нечего сохранять.";
+    return;
+  }
+  const returnPath = route.fullPath;
+  const needReturn = route.path !== "/";
+  shareGraphicBusy.value = true;
+  try {
+    if (needReturn) {
+      await router.replace("/");
+      for (let i = 0; i < 30 && !treeWorkspaceRef.value; i += 1) {
+        await nextTick();
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+    }
+    const ws = treeWorkspaceRef.value;
+    if (!ws?.exportFamilyMapPng) {
+      shareGraphicError.value =
+        "Не удалось открыть поле дерева. Перейдите на страницу с деревом и попробуйте снова.";
+      return;
+    }
+    const res = await ws.exportFamilyMapPng();
+    if (!res?.ok) {
+      if (res?.error === "empty") shareGraphicError.value = "Нет данных для изображения.";
+      else shareGraphicError.value = res?.error ? `Не удалось сохранить: ${res.error}` : "Не удалось создать файл.";
+      return;
+    }
+    const safeName = sanitizeProjectShareFilename(tree.currentProjectName);
+    const stamp = new Date().toISOString().slice(0, 10);
+    const filename = `svoi-korni-${safeName}-${stamp}.png`;
+    const url = URL.createObjectURL(res.blob);
+    try {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  } finally {
+    if (needReturn && route.fullPath !== returnPath) {
+      await router.replace(returnPath);
+    }
+    shareGraphicBusy.value = false;
+  }
 }
 
 function blockingReasonLabel(code) {
@@ -609,11 +1001,18 @@ async function confirmImportRecommendation() {
 }
 
 function cancelDelete() {
+  pendingProfileProjectDeleteId.value = null;
   tree.cancelLinkDelete();
   tree.cancelCardDelete();
 }
 
-function confirmDelete() {
+async function confirmDelete() {
+  if (pendingProfileProjectDeleteId.value != null) {
+    const id = pendingProfileProjectDeleteId.value;
+    pendingProfileProjectDeleteId.value = null;
+    await deleteProject(id);
+    return;
+  }
   if (tree.pendingCardDeleteId) {
     tree.confirmCardDelete();
     return;

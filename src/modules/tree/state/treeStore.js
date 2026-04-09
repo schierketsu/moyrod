@@ -89,7 +89,6 @@ export const useTreeStore = defineStore("tree", {
     showNewCardPanel: false,
     showEditCardPanel: false,
     editingCardId: null,
-    showStats: false,
     pendingLinkDeletePayload: null,
     pendingCardDeleteId: null,
     shareForMatching: false,

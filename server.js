@@ -2,6 +2,7 @@
 
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const express = require("express");
 const Database = require("better-sqlite3");
 const jwt = require("jsonwebtoken");
@@ -288,6 +289,19 @@ if (!hasColumn("projects", "import_source_project_id")) {
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_user_id);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_cards_owner ON shared_card_index(owner_user_id);");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS project_share_invites (
+    token TEXT PRIMARY KEY,
+    project_id INTEGER NOT NULL,
+    owner_user_id INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+`);
+db.exec("CREATE INDEX IF NOT EXISTS idx_share_invite_project ON project_share_invites(project_id);");
+if (!hasColumn("project_share_invites", "status")) {
+  db.exec("ALTER TABLE project_share_invites ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'");
+}
 db.exec("CREATE INDEX IF NOT EXISTS idx_cards_fio ON shared_card_index(fio_norm);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_cards_birth ON shared_card_index(birth_norm);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_cards_place ON shared_card_index(birth_place_norm);");
@@ -932,33 +946,17 @@ function handleMatchingRebuild(_req, res) {
 api.get("/matching/rebuild", requireAuth, handleMatchingRebuild);
 api.post("/matching/rebuild", requireAuth, handleMatchingRebuild);
 
-api.post("/matching/import-project", requireAuth, (req, res) => {
-  const sourceProjectId = Number(req.body?.projectId);
-  const sourceOwnerUid = Number(req.body?.ownerUid || 0);
-  if (!Number.isFinite(sourceProjectId) || sourceProjectId <= 0) {
-    res.status(400).json({ error: "project_id_required" });
-    return;
-  }
-  const src = db
-    .prepare(
-      `SELECT p.*, u.uid AS owner_uid, u.full_name AS owner_full_name
-       FROM projects p
-       JOIN users u ON u.id = p.owner_user_id
-       WHERE p.id = ? AND p.owner_user_id IS NOT NULL AND COALESCE(p.share_for_matching, 0) = 1`
-    )
-    .get(sourceProjectId);
-  if (!src) {
-    res.status(404).json({ error: "source_project_not_found_or_not_shared" });
-    return;
-  }
-  if (sourceOwnerUid > 0 && Number(src.owner_uid) !== sourceOwnerUid) {
-    res.status(404).json({ error: "source_owner_uid_mismatch" });
-    return;
-  }
-  const targetOwnerId = Number(req.user.id);
+/**
+ * Копирует проект в коллекцию другого пользователя (подбор / ссылка-приглашение).
+ * @param {object} src - строка projects + owner_uid, owner_full_name из JOIN users
+ * @param {number} targetOwnerUserId - users.id получателя
+ * @returns {{ ok: true, newId: number, name: string, sourceProjectId: number, sourceOwnerUid: number, updated_at: number } | { error: string }}
+ */
+function cloneProjectToUserCollection(src, targetOwnerUserId) {
+  const targetOwnerId = Number(targetOwnerUserId);
+  if (!Number.isFinite(targetOwnerId)) return { error: "bad_target" };
   if (Number(src.owner_user_id) === targetOwnerId) {
-    res.status(400).json({ error: "cannot_import_own_project" });
-    return;
+    return { error: "cannot_import_own_project" };
   }
 
   let profileObj = null;
@@ -972,6 +970,7 @@ api.post("/matching/import-project", requireAuth, (req, res) => {
   }
 
   const now = Date.now();
+  const sourceProjectId = Number(src.id);
   const baseName = String(src.name || "Проект").trim() || "Проект";
   const clonedName = `${baseName} (копия)`.slice(0, 200);
   const info = db
@@ -998,17 +997,251 @@ api.post("/matching/import-project", requireAuth, (req, res) => {
       sourceProjectId
     );
 
+  return {
+    ok: true,
+    newId: Number(info.lastInsertRowid),
+    name: clonedName,
+    sourceProjectId,
+    sourceOwnerUid: Number(src.owner_uid),
+    updated_at: now,
+  };
+}
+
+api.post("/projects/:id/share-invite", requireAuth, (req, res) => {
+  const id = +req.params.id;
+  const ownerId = Number(req.user.id);
+  const row = db.prepare("SELECT id FROM projects WHERE id = ? AND owner_user_id = ?").get(id, ownerId);
+  if (!row) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const token = crypto.randomBytes(24).toString("hex");
+  const now = Date.now();
+  db.prepare(
+    "INSERT INTO project_share_invites (token, project_id, owner_user_id, created_at, status) VALUES (?, ?, ?, ?, 'pending')"
+  ).run(token, id, ownerId, now);
+  res.json({ ok: true, token, createdAt: now });
+});
+
+api.get("/projects/:id/share-invites", requireAuth, (req, res) => {
+  const id = +req.params.id;
+  const ownerId = Number(req.user.id);
+  const own = db.prepare("SELECT id FROM projects WHERE id = ? AND owner_user_id = ?").get(id, ownerId);
+  if (!own) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const rows = db
+    .prepare(
+      `SELECT token, status, created_at FROM project_share_invites
+       WHERE project_id = ? AND owner_user_id = ?
+       ORDER BY created_at DESC`
+    )
+    .all(id, ownerId);
+  res.json({
+    invites: rows.map((r) => ({
+      token: r.token,
+      status: String(r.status || "pending").toLowerCase(),
+      createdAt: r.created_at,
+    })),
+  });
+});
+
+api.post("/projects/:id/share-invites/:token/annul", requireAuth, (req, res) => {
+  const id = +req.params.id;
+  const token = String(req.params.token || "").trim();
+  const ownerId = Number(req.user.id);
+  if (!token || token.length < 16) {
+    res.status(400).json({ error: "invalid_token" });
+    return;
+  }
+  const own = db.prepare("SELECT id FROM projects WHERE id = ? AND owner_user_id = ?").get(id, ownerId);
+  if (!own) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+  const inv = db
+    .prepare(
+      "SELECT status FROM project_share_invites WHERE token = ? AND project_id = ? AND owner_user_id = ?"
+    )
+    .get(token, id, ownerId);
+  if (!inv) {
+    res.status(404).json({ error: "invite_not_found" });
+    return;
+  }
+  const st = String(inv.status || "pending").toLowerCase();
+  if (st !== "pending") {
+    res.status(400).json({ error: "invite_not_pending" });
+    return;
+  }
+  db.prepare("UPDATE project_share_invites SET status = 'annulled' WHERE token = ?").run(token);
+  res.json({ ok: true });
+});
+
+api.get("/share/invite/:token", (req, res) => {
+  const token = String(req.params.token || "").trim();
+  if (!token || token.length < 16) {
+    res.status(400).json({ error: "invalid_token" });
+    return;
+  }
+  const inv = db.prepare("SELECT * FROM project_share_invites WHERE token = ?").get(token);
+  if (!inv) {
+    res.status(404).json({ error: "invite_not_found" });
+    return;
+  }
+  const st = String(inv.status || "pending").toLowerCase();
+  if (st !== "pending") {
+    res.status(410).json({ error: "invite_closed", status: st });
+    return;
+  }
+  const row = db
+    .prepare(
+      `SELECT p.id, p.name, p.owner_user_id, u.uid AS owner_uid, u.full_name AS owner_full_name
+       FROM projects p
+       JOIN users u ON u.id = p.owner_user_id
+       WHERE p.id = ? AND p.owner_user_id = ?`
+    )
+    .get(inv.project_id, inv.owner_user_id);
+  if (!row) {
+    res.status(404).json({ error: "project_gone" });
+    return;
+  }
+  res.json({
+    ok: true,
+    projectId: row.id,
+    projectName: String(row.name || "").trim() || "Проект",
+    ownerUid: Number(row.owner_uid),
+    ownerName: String(row.owner_full_name || "").trim() || null,
+  });
+});
+
+api.post("/share/invite/:token/decline", (req, res) => {
+  const token = String(req.params.token || "").trim();
+  if (!token || token.length < 16) {
+    res.status(400).json({ error: "invalid_token" });
+    return;
+  }
+  const inv = db.prepare("SELECT * FROM project_share_invites WHERE token = ?").get(token);
+  if (!inv) {
+    res.status(404).json({ error: "invite_not_found" });
+    return;
+  }
+  const st = String(inv.status || "pending").toLowerCase();
+  if (st !== "pending") {
+    res.status(410).json({ error: "invite_closed", status: st });
+    return;
+  }
+  db.prepare("UPDATE project_share_invites SET status = 'declined' WHERE token = ?").run(token);
+  res.json({ ok: true });
+});
+
+api.post("/share/invite/:token/accept", requireAuth, (req, res) => {
+  const token = String(req.params.token || "").trim();
+  if (!token || token.length < 16) {
+    res.status(400).json({ error: "invalid_token" });
+    return;
+  }
+  try {
+    const result = db.transaction(() => {
+      const inv = db.prepare("SELECT * FROM project_share_invites WHERE token = ?").get(token);
+      if (!inv) {
+        const e = new Error("invite_not_found");
+        e._http = 404;
+        e._body = { error: "invite_not_found" };
+        throw e;
+      }
+      const st = String(inv.status || "pending").toLowerCase();
+      if (st !== "pending") {
+        const e = new Error("invite_closed");
+        e._http = 410;
+        e._body = { error: "invite_closed", status: st };
+        throw e;
+      }
+      const src = db
+        .prepare(
+          `SELECT p.*, u.uid AS owner_uid, u.full_name AS owner_full_name
+           FROM projects p
+           JOIN users u ON u.id = p.owner_user_id
+           WHERE p.id = ? AND p.owner_user_id = ?`
+        )
+        .get(inv.project_id, inv.owner_user_id);
+      if (!src) {
+        const e = new Error("project_gone");
+        e._http = 404;
+        e._body = { error: "project_gone" };
+        throw e;
+      }
+      const cloned = cloneProjectToUserCollection(src, Number(req.user.id));
+      if (cloned.error) {
+        const e = new Error(cloned.error);
+        e._http = 400;
+        e._body = { error: cloned.error };
+        throw e;
+      }
+      db.prepare("UPDATE project_share_invites SET status = 'accepted' WHERE token = ?").run(token);
+      return cloned;
+    })();
+    res.json({
+      ok: true,
+      importedProject: {
+        id: result.newId,
+        name: result.name,
+        ownerUid: req.user.uid,
+        copiedFrom: {
+          projectId: result.sourceProjectId,
+          ownerUid: result.sourceOwnerUid,
+        },
+        updated_at: result.updated_at,
+      },
+    });
+  } catch (e) {
+    if (e._http && e._body) {
+      res.status(e._http).json(e._body);
+      return;
+    }
+    res.status(500).json({ error: String(e.message) });
+  }
+});
+
+api.post("/matching/import-project", requireAuth, (req, res) => {
+  const sourceProjectId = Number(req.body?.projectId);
+  const sourceOwnerUid = Number(req.body?.ownerUid || 0);
+  if (!Number.isFinite(sourceProjectId) || sourceProjectId <= 0) {
+    res.status(400).json({ error: "project_id_required" });
+    return;
+  }
+  const src = db
+    .prepare(
+      `SELECT p.*, u.uid AS owner_uid, u.full_name AS owner_full_name
+       FROM projects p
+       JOIN users u ON u.id = p.owner_user_id
+       WHERE p.id = ? AND p.owner_user_id IS NOT NULL AND COALESCE(p.share_for_matching, 0) = 1`
+    )
+    .get(sourceProjectId);
+  if (!src) {
+    res.status(404).json({ error: "source_project_not_found_or_not_shared" });
+    return;
+  }
+  if (sourceOwnerUid > 0 && Number(src.owner_uid) !== sourceOwnerUid) {
+    res.status(404).json({ error: "source_owner_uid_mismatch" });
+    return;
+  }
+  const result = cloneProjectToUserCollection(src, Number(req.user.id));
+  if (result.error) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
   res.json({
     ok: true,
     importedProject: {
-      id: Number(info.lastInsertRowid),
-      name: clonedName,
+      id: result.newId,
+      name: result.name,
       ownerUid: req.user.uid,
       copiedFrom: {
-        projectId: sourceProjectId,
-        ownerUid: Number(src.owner_uid),
+        projectId: result.sourceProjectId,
+        ownerUid: result.sourceOwnerUid,
       },
-      updated_at: now,
+      updated_at: result.updated_at,
     },
   });
 });

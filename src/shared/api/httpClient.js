@@ -13,8 +13,16 @@ function withAuthHeaders(init) {
 export async function getJson(url, init) {
   const response = await fetch(url, withAuthHeaders(init));
   if (!response.ok) {
-    const err = new Error(`HTTP ${response.status} for ${url}`);
+    let body = null;
+    try {
+      body = await response.json();
+    } catch {
+      body = null;
+    }
+    const msg = body && typeof body.error === "string" ? body.error : `HTTP ${response.status} for ${url}`;
+    const err = new Error(msg);
     err.status = response.status;
+    err.body = body;
     throw err;
   }
   return response.json();

@@ -96,4 +96,23 @@ export const projectsApi = {
       )}`
     );
   },
+  createProjectShareInvite(projectId) {
+    return sendJson(`/api/projects/${encodeURIComponent(Number(projectId))}/share-invite`, "POST", {});
+  },
+  getShareInviteInfo(token) {
+    return getJson(`/api/share/invite/${encodeURIComponent(String(token || "").trim())}`);
+  },
+  acceptShareInvite(token) {
+    return sendJson(`/api/share/invite/${encodeURIComponent(String(token || "").trim())}/accept`, "POST", {});
+  },
+  declineShareInvite(token) {
+    return sendJson(`/api/share/invite/${encodeURIComponent(String(token || "").trim())}/decline`, "POST", {});
+  },
+  listProjectShareInvites(projectId) {
+    return getJson(`/api/projects/${encodeURIComponent(Number(projectId))}/share-invites`);
+  },
+  annulProjectShareInvite(projectId, token) {
+    const t = encodeURIComponent(String(token || "").trim());
+    return sendJson(`/api/projects/${encodeURIComponent(Number(projectId))}/share-invites/${t}/annul`, "POST", {});
+  },
 };

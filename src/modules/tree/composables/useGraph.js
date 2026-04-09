@@ -40,6 +40,22 @@ function sideCenterPoints(a, b) {
   };
 }
 
+function spouseCurvePath(from, to) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dist = Math.hypot(dx, dy);
+  const dir = dx >= 0 ? 1 : -1;
+  // Мягкий горизонтальный изгиб: чем дальше карточки, тем плавнее дуга.
+  const bend = Math.max(28, Math.min(120, dist * 0.28));
+  const c1x = from.x + dir * bend;
+  const c2x = to.x - dir * bend;
+  // Небольшая компенсация по Y, чтобы линия выглядела живее при вертикальном смещении карточек.
+  const yShift = Math.max(-34, Math.min(34, dy * 0.22));
+  const c1y = from.y + yShift;
+  const c2y = to.y - yShift;
+  return `M ${from.x} ${from.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${to.x} ${to.y}`;
+}
+
 export function useGraph(store) {
   const pendingPort = ref(null);
   const pendingUnion = ref(null);
@@ -125,7 +141,7 @@ export function useGraph(store) {
         const p = sideCenterPoints(a, b);
         out.push({
           key: `${kind}:${link.a}:${link.b}`,
-          d: `M ${p.from.x} ${p.from.y} L ${p.to.x} ${p.to.y}`,
+          d: spouseCurvePath(p.from, p.to),
           className: "lines-layer-path lines-layer-path--spouse",
           payload: { kind: "spouse", a: link.a, b: link.b },
         });

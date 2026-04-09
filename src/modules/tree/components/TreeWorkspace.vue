@@ -16,11 +16,43 @@
       @pointerup="onViewportPointerUp"
       @pointercancel="onViewportPointerUp"
     >
-      <div class="map-world" :style="{ ...worldStyle, width: `${store.fieldW}px`, height: `${store.fieldH}px` }">
+      <div ref="mapWorldRef" class="map-world" :style="{ ...worldStyle, width: `${store.fieldW}px`, height: `${store.fieldH}px` }">
+        <svg class="surname-clouds-layer" :width="store.fieldW" :height="store.fieldH" aria-hidden="true">
+          <path
+            v-for="cloud in surnameClouds"
+            :key="cloud.key"
+            class="surname-cloud-path"
+            :d="cloud.d"
+            :fill="cloud.color"
+            fill-rule="evenodd"
+          />
+        </svg>
         <svg class="lines-layer" :width="store.fieldW" :height="store.fieldH" aria-hidden="true">
           <g v-for="line in linksPath" :key="line.key">
-            <path :d="line.d" :class="line.className || 'lines-layer-path'" />
-            <path :d="line.d" class="lines-layer-hit" @pointerdown.stop.prevent="store.requestLinkDelete(line.payload)" />
+            <!-- Атрибуты stroke/fill (не только CSS): в снимке foreignObject так стабильнее, чем таблица стилей -->
+            <path
+              :d="line.d"
+              fill="none"
+              stroke="#5b3a29"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              pointer-events="none"
+              :stroke-opacity="linkLineStrokeOpacity(line)"
+              :stroke-dasharray="linkLineStrokeDasharray(line)"
+              :class="line.className || 'lines-layer-path'"
+            />
+            <path
+              :d="line.d"
+              fill="none"
+              stroke="transparent"
+              stroke-width="22"
+              stroke-linecap="round"
+              pointer-events="visibleStroke"
+              class="lines-layer-hit"
+              style="cursor: pointer"
+              @pointerdown.stop.prevent="store.requestLinkDelete(line.payload)"
+            />
           </g>
         </svg>
         <div class="cards-layer" :style="{ width: `${store.fieldW}px`, height: `${store.fieldH}px` }">
@@ -373,7 +405,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, defineExpose, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useTreeStore } from "../state/treeStore";
 import { useViewport } from "../composables/useViewport";
@@ -400,6 +432,7 @@ const {
   fieldCoordsFromClient,
 } =
   useViewport(store);
+const mapWorldRef = ref(null);
 const selectedCardIds = ref([]);
 const selectionBox = reactive({
   active: false,
@@ -430,6 +463,8 @@ const { cardStyle, startDrag, onDragMove, onDragEnd, addCardFromDraft, openEdit,
 const isNewCardEmpty = computed(
   () => !store.newCardDraft.fio && !store.newCardDraft.birth && !store.newCardDraft.birthPlace
 );
+const CARD_W = 232;
+const CARD_H = 204;
 const newPlaceSuggestions = ref([]);
 const editPlaceSuggestions = ref([]);
 let newSuggestTimer = null;
@@ -438,6 +473,456 @@ let editSuggestTimer = null;
 const birthMonthOptions = BIRTH_MONTH_OPTIONS;
 const newBirth = reactive({ day: "", month: "", year: "" });
 const editBirth = reactive({ day: "", month: "", year: "" });
+const cloudPalette = [
+  "rgba(80, 170, 255, 0.24)",   // blue
+  "rgba(142, 112, 255, 0.24)",  // violet
+  "rgba(255, 176, 46, 0.24)",   // amber
+  "rgba(255, 122, 168, 0.24)",  // pink
+  "rgba(70, 206, 191, 0.24)",   // turquoise
+  "rgba(124, 214, 82, 0.23)",   // lime
+  "rgba(255, 147, 98, 0.23)",   // coral
+  "rgba(88, 199, 255, 0.23)",   // cyan
+  "rgba(185, 122, 255, 0.23)",  // purple
+  "rgba(255, 196, 74, 0.23)",   // yellow
+  "rgba(255, 106, 147, 0.22)",  // rose
+  "rgba(94, 180, 255, 0.23)",   // sky
+  "rgba(74, 219, 166, 0.22)",   // mint
+  "rgba(255, 136, 84, 0.22)",   // orange
+  "rgba(115, 149, 255, 0.23)",  // indigo
+  "rgba(57, 205, 228, 0.22)",   // aqua
+];
+
+function convexHull(points) {
+  const pts = [...points].sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+  if (pts.length <= 2) return pts;
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i = pts.length - 1; i >= 0; i -= 1) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+function cloudPathFromHull(hull) {
+  if (!hull || hull.length === 0) return "";
+  if (hull.length === 1) {
+    const p = hull[0];
+    const r = 120;
+    return `M ${p.x - r} ${p.y} a ${r} ${r} 0 1 0 ${r * 2} 0 a ${r} ${r} 0 1 0 ${-r * 2} 0`;
+  }
+  if (hull.length === 2) {
+    const a = hull[0];
+    const b = hull[1];
+    const cx = (a.x + b.x) / 2;
+    const cy = (a.y + b.y) / 2;
+    const rx = Math.max(140, Math.abs(a.x - b.x) / 2 + 90);
+    const ry = Math.max(110, Math.abs(a.y - b.y) / 2 + 80);
+    return `M ${cx - rx} ${cy} a ${rx} ${ry} 0 1 0 ${rx * 2} 0 a ${rx} ${ry} 0 1 0 ${-rx * 2} 0`;
+  }
+  const pts = [...hull];
+  const n = pts.length;
+  const smooth = 0.22;
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 0; i < n; i += 1) {
+    const p0 = pts[(i - 1 + n) % n];
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    const p3 = pts[(i + 2) % n];
+    const cp1x = p1.x + ((p2.x - p0.x) / 6) * smooth * 6;
+    const cp1y = p1.y + ((p2.y - p0.y) / 6) * smooth * 6;
+    const cp2x = p2.x - ((p3.x - p1.x) / 6) * smooth * 6;
+    const cp2y = p2.y - ((p3.y - p1.y) / 6) * smooth * 6;
+    d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+  }
+  d += " Z";
+  return d;
+}
+
+function pointInPolygon(point, polygon) {
+  if (!polygon || polygon.length < 3) return false;
+  const x = point.x;
+  const y = point.y;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x;
+    const yi = polygon[i].y;
+    const xj = polygon[j].x;
+    const yj = polygon[j].y;
+    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-9) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function polygonBbox(poly) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of poly || []) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+function rectIntersectsBBox(rect, bbox) {
+  return !(
+    rect.right < bbox.minX ||
+    rect.left > bbox.maxX ||
+    rect.bottom < bbox.minY ||
+    rect.top > bbox.maxY
+  );
+}
+
+function segmentsIntersect(a, b, c, d) {
+  const cross = (p1, p2, p3) => (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x);
+  const onSeg = (p1, p2, p) =>
+    Math.min(p1.x, p2.x) <= p.x &&
+    p.x <= Math.max(p1.x, p2.x) &&
+    Math.min(p1.y, p2.y) <= p.y &&
+    p.y <= Math.max(p1.y, p2.y);
+  const d1 = cross(a, b, c);
+  const d2 = cross(a, b, d);
+  const d3 = cross(c, d, a);
+  const d4 = cross(c, d, b);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+  if (d1 === 0 && onSeg(a, b, c)) return true;
+  if (d2 === 0 && onSeg(a, b, d)) return true;
+  if (d3 === 0 && onSeg(c, d, a)) return true;
+  if (d4 === 0 && onSeg(c, d, b)) return true;
+  return false;
+}
+
+function polygonIntersectsRect(polygon, rect) {
+  if (!polygon || polygon.length < 2) return false;
+  // 1) Вершина полигона в прямоугольнике
+  const polyVertexInsideRect = polygon.some(
+    (p) => p.x >= rect.left && p.x <= rect.right && p.y >= rect.top && p.y <= rect.bottom
+  );
+  if (polyVertexInsideRect) return true;
+  // 2) Угол прямоугольника внутри полигона
+  const corners = [
+    { x: rect.left, y: rect.top },
+    { x: rect.right, y: rect.top },
+    { x: rect.left, y: rect.bottom },
+    { x: rect.right, y: rect.bottom },
+  ];
+  if (corners.some((p) => pointInPolygon(p, polygon))) return true;
+  // 3) Пересечение рёбер
+  const rectEdges = [
+    [corners[0], corners[1]],
+    [corners[1], corners[3]],
+    [corners[3], corners[2]],
+    [corners[2], corners[0]],
+  ];
+  for (let i = 0; i < polygon.length; i += 1) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    for (const [c, d] of rectEdges) {
+      if (segmentsIntersect(a, b, c, d)) return true;
+    }
+  }
+  return false;
+}
+
+function cardVisualSize(card) {
+  const base = { w: CARD_W, h: CARD_H };
+  if (!card?.id || typeof document === "undefined") return base;
+  const el = document.getElementById(card.id);
+  if (!el) return base;
+  return {
+    w: Math.max(base.w, el.offsetWidth || base.w),
+    h: Math.max(base.h, el.offsetHeight || base.h),
+  };
+}
+
+function roundedRectPath(left, top, width, height, radius = 14) {
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
+  const r = Math.max(0, Math.min(radius, Math.min(w, h) / 2));
+  const x = left;
+  const y = top;
+  return [
+    `M ${x + r} ${y}`,
+    `L ${x + w - r} ${y}`,
+    `Q ${x + w} ${y} ${x + w} ${y + r}`,
+    `L ${x + w} ${y + h - r}`,
+    `Q ${x + w} ${y + h} ${x + w - r} ${y + h}`,
+    `L ${x + r} ${y + h}`,
+    `Q ${x} ${y + h} ${x} ${y + h - r}`,
+    `L ${x} ${y + r}`,
+    `Q ${x} ${y} ${x + r} ${y}`,
+    "Z",
+  ].join(" ");
+}
+
+
+function surnameFromFio(fio) {
+  const parts = String(fio || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "";
+  return parts[0].toLowerCase();
+}
+
+function canonicalSurname(surnameRaw) {
+  let s = String(surnameRaw || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^\p{L}-]+/gu, "");
+  if (!s) return "";
+  if (s.endsWith("ская")) s = `${s.slice(0, -4)}ий`;
+  else if (s.endsWith("цкая")) s = `${s.slice(0, -4)}ий`;
+  else if (s.endsWith("ова") || s.endsWith("ева") || s.endsWith("ина") || s.endsWith("ына")) s = s.slice(0, -1);
+  else if (s.endsWith("ая") && s.length > 4) s = `${s.slice(0, -2)}ий`;
+  return s;
+}
+
+function surnameKeysFromCard(card) {
+  const keys = new Set();
+  const fioSurname = canonicalSurname(surnameFromFio(card?.fio));
+  if (fioSurname) keys.add(fioSurname);
+  const maidenSurname = maidenSurnameKeyFromCard(card);
+  if (maidenSurname) keys.add(maidenSurname);
+  return [...keys];
+}
+
+function maidenSurnameKeyFromCard(card) {
+  const maidenRaw = String(card?.maidenName || "").trim().toLowerCase();
+  return canonicalSurname(maidenRaw.split(/\s+/).filter(Boolean)[0] || "");
+}
+
+function ownerSurnameKeyFromCard(card) {
+  const fioSurname = canonicalSurname(surnameFromFio(card?.fio));
+  if (fioSurname) return fioSurname;
+  const maidenSurname = maidenSurnameKeyFromCard(card);
+  return maidenSurname || "";
+}
+
+function cloudColorBySurname(surname) {
+  let h = 0;
+  for (let i = 0; i < surname.length; i += 1) h = (h * 31 + surname.charCodeAt(i)) >>> 0;
+  return cloudPalette[h % cloudPalette.length];
+}
+
+const surnameClouds = computed(() => {
+  const visualSizeCache = new Map();
+  const getVisualSize = (card) => {
+    if (!card?.id) return cardVisualSize(card);
+    if (!visualSizeCache.has(card.id)) visualSizeCache.set(card.id, cardVisualSize(card));
+    return visualSizeCache.get(card.id);
+  };
+  const byCanon = new Map();
+  const ownerCanonById = new Map();
+  const maidenCanonById = new Map();
+  const cardsById = new Map((store.cards || []).map((c) => [c.id, c]));
+  for (const c of store.cards || []) {
+    ownerCanonById.set(c.id, ownerSurnameKeyFromCard(c));
+    maidenCanonById.set(c.id, maidenSurnameKeyFromCard(c));
+    const keys = surnameKeysFromCard(c);
+    for (const canon of keys) {
+      if (!canon) continue;
+      if (!byCanon.has(canon)) byCanon.set(canon, []);
+      byCanon.get(canon).push(c);
+    }
+  }
+
+  // Кровные связи: только родитель-ребенок (lineage, childOfUnion), без spouse.
+  const bloodAdj = new Map();
+  const addBloodEdge = (a, b) => {
+    if (!a || !b) return;
+    if (!bloodAdj.has(a)) bloodAdj.set(a, new Set());
+    if (!bloodAdj.has(b)) bloodAdj.set(b, new Set());
+    bloodAdj.get(a).add(b);
+    bloodAdj.get(b).add(a);
+  };
+  for (const l of store.links || []) {
+    const kind = l.kind || "lineage";
+    if (kind === "lineage" && l.from && l.to) addBloodEdge(l.from, l.to);
+    if (kind === "childOfUnion" && l.child) {
+      if (l.a) addBloodEdge(l.a, l.child);
+      if (l.b) addBloodEdge(l.b, l.child);
+    }
+  }
+  const hasBloodPathToAny = (fromId, targetIds) => {
+    if (!fromId || !targetIds || targetIds.size === 0) return false;
+    if (targetIds.has(fromId)) return true;
+    const q = [fromId];
+    const seen = new Set([fromId]);
+    while (q.length) {
+      const cur = q.shift();
+      const next = bloodAdj.get(cur);
+      if (!next) continue;
+      for (const n of next) {
+        if (seen.has(n)) continue;
+        if (targetIds.has(n)) return true;
+        seen.add(n);
+        q.push(n);
+      }
+    }
+    return false;
+  };
+
+  const pairKey = (a, b) => (String(a) < String(b) ? `${a}|${b}` : `${b}|${a}`);
+  const linkedPairs = new Set();
+  for (const l of store.links || []) {
+    const kind = l.kind || "lineage";
+    if (kind === "lineage" && l.from && l.to) linkedPairs.add(pairKey(l.from, l.to));
+    if (kind === "spouse" && l.a && l.b) linkedPairs.add(pairKey(l.a, l.b));
+    if (kind === "childOfUnion" && l.a && l.child) linkedPairs.add(pairKey(l.a, l.child));
+    if (kind === "childOfUnion" && l.b && l.child) linkedPairs.add(pairKey(l.b, l.child));
+  }
+
+  const isNear = (a, b) => {
+    const ax = (Number(a.x) || 0) + CARD_W / 2;
+    const ay = (Number(a.y) || 0) + CARD_H / 2;
+    const bx = (Number(b.x) || 0) + CARD_W / 2;
+    const by = (Number(b.y) || 0) + CARD_H / 2;
+    const dx = ax - bx;
+    const dy = ay - by;
+    return dx * dx + dy * dy <= 460 * 460;
+  };
+
+  const out = [];
+  const cardCenter = (c) => ({
+    x: (Number(c?.x) || 0) + CARD_W / 2,
+    y: (Number(c?.y) || 0) + CARD_H / 2,
+  });
+  const buildPts = (items, pad, links) => {
+    const pts = [];
+    for (const c of items) {
+      const x = Number(c.x) || 0;
+      const y = Number(c.y) || 0;
+      pts.push({ x: x - pad, y: y - pad });
+      pts.push({ x: x + CARD_W + pad, y: y - pad });
+      pts.push({ x: x + CARD_W + pad, y: y + CARD_H + pad });
+      pts.push({ x: x - pad, y: y + CARD_H + pad });
+      const cc = cardCenter(c);
+      pts.push(cc);
+    }
+    const sameIds = new Set(items.map((x) => x.id));
+    for (const l of links || []) {
+      const kind = l.kind || "lineage";
+      if (kind === "lineage" && sameIds.has(l.from) && sameIds.has(l.to)) {
+        const a = items.find((x) => x.id === l.from);
+        const b = items.find((x) => x.id === l.to);
+        if (a && b) {
+          const ca = cardCenter(a);
+          const cb = cardCenter(b);
+          pts.push({ x: (ca.x + cb.x) / 2, y: (ca.y + cb.y) / 2 });
+        }
+      }
+      if (kind === "spouse" && sameIds.has(l.a) && sameIds.has(l.b)) {
+        const a = items.find((x) => x.id === l.a);
+        const b = items.find((x) => x.id === l.b);
+        if (a && b) {
+          const ca = cardCenter(a);
+          const cb = cardCenter(b);
+          pts.push({ x: (ca.x + cb.x) / 2, y: (ca.y + cb.y) / 2 });
+        }
+      }
+    }
+    return pts;
+  };
+  for (const [canonSurnameKey, cards] of byCanon.entries()) {
+    if (!cards || cards.length < 2) continue;
+    // Если однофамильцы далеко и не связаны, делим на отдельные группы-компоненты.
+    const parent = new Map(cards.map((c) => [c.id, c.id]));
+    const find = (x) => {
+      let p = parent.get(x);
+      while (p !== parent.get(p)) p = parent.get(p);
+      return p;
+    };
+    const unite = (a, b) => {
+      const ra = find(a);
+      const rb = find(b);
+      if (ra !== rb) parent.set(ra, rb);
+    };
+    for (let i = 0; i < cards.length; i += 1) {
+      for (let j = i + 1; j < cards.length; j += 1) {
+        const a = cards[i];
+        const b = cards[j];
+        if (linkedPairs.has(pairKey(a.id, b.id)) || isNear(a, b)) {
+          unite(a.id, b.id);
+        }
+      }
+    }
+    const components = new Map();
+    for (const c of cards) {
+      const r = find(c.id);
+      if (!components.has(r)) components.set(r, []);
+      components.get(r).push(c);
+    }
+
+    const groups = [...components.values()].filter((arr) => arr.length >= 2);
+    for (let gi = 0; gi < groups.length; gi += 1) {
+      const items = groups[gi];
+      const memberIds = new Set(items.map((x) => x.id));
+      const bloodCoreIds = new Set(
+        items
+          .filter((x) => (ownerCanonById.get(x.id) || "") === canonSurnameKey)
+          .map((x) => x.id)
+      );
+      if (bloodCoreIds.size === 0) {
+        for (const x of items) bloodCoreIds.add(x.id);
+      }
+      // Приоритет "родного" облака:
+      // если карточка входит в текущую группу только как вторичная (например, девичья фамилия),
+      // а ее родная фамилия другая, для этого облака она считается "чужой" и получает карман.
+      const allOthers = (store.cards || []).filter((c) => {
+        if (!memberIds.has(c.id)) return true;
+        const ownerCanon = ownerCanonById.get(c.id) || "";
+        if (!ownerCanon || ownerCanon === canonSurnameKey) return false;
+
+        const gender = String(cardsById.get(c.id)?.gender || "");
+        const maidenCanon = maidenCanonById.get(c.id) || "";
+        const hasBloodToCore = hasBloodPathToAny(c.id, bloodCoreIds);
+
+        // Женщина с девичьей фамилией этой семьи может принадлежать двум облакам.
+        if (gender === "f" && maidenCanon === canonSurnameKey) return false;
+        // Мужчина без кровной связи с этой семьей должен получать карман.
+        if (gender === "m" && !hasBloodToCore) return true;
+        // Для остальных вторичных участников оставляем строгий режим (карман).
+        return true;
+      });
+      const pad = 56;
+      const hull = convexHull(buildPts(items, pad, store.links || []));
+      const outer = cloudPathFromHull(hull);
+      if (!outer) continue;
+
+      // Локальная коррекция формы: вырезы только там, где чужая карточка
+      // пересекает облако хотя бы частично.
+      const holePad = 22;
+      const holes = [];
+      const hullBox = polygonBbox(hull);
+      for (const c of allOthers) {
+        const sz = getVisualSize(c);
+        const x = Number(c.x) || 0;
+        const y = Number(c.y) || 0;
+        const rect = { left: x, top: y, right: x + sz.w, bottom: y + sz.h };
+        if (!rectIntersectsBBox(rect, hullBox)) continue;
+        const center = { x: x + sz.w / 2, y: y + sz.h / 2 };
+        const centerInside = pointInPolygon(center, hull);
+        const intersects = polygonIntersectsRect(hull, rect);
+        if (!centerInside && !intersects) continue;
+        holes.push(roundedRectPath(x - holePad, y - holePad, sz.w + holePad * 2, sz.h + holePad * 2, 24));
+      }
+      const d = holes.length ? `${outer} ${holes.join(" ")}` : outer;
+      out.push({ key: `cloud:${canonSurnameKey}:${gi}`, color: cloudColorBySurname(canonSurnameKey), d });
+    }
+  }
+  return out;
+});
 
 watch(
   () => store.showNewCardPanel,
@@ -794,6 +1279,123 @@ function pickEditBirthPlace(value) {
   store.editDraft.birthPlace = value;
   editPlaceSuggestions.value = [];
 }
+
+function linkLineStrokeOpacity(line) {
+  return (line.className || "").includes("lines-layer-path--spouse") ? 0.92 : 0.88;
+}
+
+/** Для сплошной линии не задаём dasharray (undefined — атрибут не рендерится). */
+function linkLineStrokeDasharray(line) {
+  return (line.className || "").includes("lines-layer-path--spouse") ? "5 6" : undefined;
+}
+
+function exportFilterForShare(node) {
+  if (!(node instanceof Element)) return true;
+  if (node.classList.contains("lines-layer-hit")) return false;
+  if (node.classList.contains("card-icon-btn")) return false;
+  if (node.classList.contains("card-port")) return false;
+  if (node.classList.contains("union-node")) return false;
+  if (node.classList.contains("selection-box")) return false;
+  if (node.classList.contains("card-body-help")) return false;
+  return true;
+}
+
+/** Лимит стороны SVG→bitmap: иначе декодер обрезает картинку (видна «часть карты»). */
+const EXPORT_BITMAP_MAX_SIDE = 8192;
+/** Итоговый canvas (html-to-image) до внутреннего авто-скейла. */
+const EXPORT_CANVAS_MAX_SIDE = 16384;
+
+/**
+ * В снимке foreignObject клону не видны внешние таблицы стилей — инлайнится computed style.
+ * Для path с stroke из var(--line) и облаков с opacity это даёт кривой вид; перед клоном включаем
+ * глобальные правила с !important, clone-node снимает уже исправленный getComputedStyle.
+ */
+const EXPORT_SNAPSHOT_STYLE_ID = "svoi-korni-export-snapshot-css";
+
+const EXPORT_SNAPSHOT_CSS = `
+.lines-layer {
+  shape-rendering: geometricPrecision !important;
+}
+/* Запас от заливки; обводка задаётся инлайном на path (linkLineVisualStyle) */
+.lines-layer path {
+  fill: none !important;
+}
+.surname-clouds-layer,
+.surname-clouds-layer svg {
+  overflow: visible !important;
+}
+.surname-cloud-path {
+  mix-blend-mode: normal !important;
+  isolation: isolate !important;
+  opacity: 0.3 !important;
+}
+`;
+
+/**
+ * PNG всего поля: масштаб под декодер SVG, корень клона — scale (через options.style), линии/облака — см. EXPORT_SNAPSHOT_CSS.
+ * @returns {Promise<{ ok: true, blob: Blob } | { ok: false, error: string }>}
+ */
+async function exportFamilyMapPng(options = {}) {
+  const el = mapWorldRef.value;
+  if (!el) return { ok: false, error: "no_element" };
+  if (!store.currentProjectId) return { ok: false, error: "no_project" };
+  if (!store.cards.length) return { ok: false, error: "empty" };
+
+  const fw = Math.max(1, el.offsetWidth || store.fieldW);
+  const fh = Math.max(1, el.offsetHeight || store.fieldH);
+  const maxSide = Math.max(fw, fh);
+  const layoutScale = Math.min(1, EXPORT_BITMAP_MAX_SIDE / maxSide);
+  const svgW = Math.max(1, Math.round(fw * layoutScale));
+  const svgH = Math.max(1, Math.round(fh * layoutScale));
+
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  const basePr =
+    typeof options.pixelRatio === "number" && options.pixelRatio > 0
+      ? Math.min(4, options.pixelRatio)
+      : Math.min(4, Math.max(2.25, dpr * 2));
+  let pixelRatio = Math.min(basePr, EXPORT_CANVAS_MAX_SIDE / svgW, EXPORT_CANVAS_MAX_SIDE / svgH);
+  pixelRatio = Math.max(1, pixelRatio);
+
+  let styleTag = null;
+  try {
+    styleTag = document.createElement("style");
+    styleTag.id = EXPORT_SNAPSHOT_STYLE_ID;
+    styleTag.textContent = EXPORT_SNAPSHOT_CSS;
+    document.head.appendChild(styleTag);
+    await nextTick();
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+    const { toCanvas } = await import("html-to-image");
+    const canvas = await toCanvas(el, {
+      width: svgW,
+      height: svgH,
+      pixelRatio,
+      backgroundColor: "#ecefed",
+      filter: exportFilterForShare,
+      cacheBust: true,
+      /** Иначе чтение cssRules с fonts.googleapis.com даёт SecurityError и портит растеризацию. */
+      skipFonts: true,
+      style: {
+        boxSizing: "border-box",
+        overflow: "visible",
+        willChange: "auto",
+        width: `${fw}px`,
+        height: `${fh}px`,
+        transformOrigin: "0 0",
+        transform: `scale(${layoutScale})`,
+      },
+    });
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!blob) return { ok: false, error: "blob" };
+    return { ok: true, blob };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  } finally {
+    styleTag?.remove?.();
+  }
+}
+
+defineExpose({ exportFamilyMapPng });
 
 onMounted(() => {
   window.addEventListener("pointermove", onDragMove);

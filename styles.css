@@ -1000,6 +1000,26 @@
   background-position: 0 0;
 }
 
+.surname-clouds-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.surname-cloud-group {
+  position: absolute;
+  inset: 0;
+}
+
+.surname-cloud-path {
+  filter: none;
+  mix-blend-mode: normal;
+  opacity: 0.28;
+}
+
 .map-zoom-tools {
   position: absolute;
   left: 1.25rem;
@@ -1054,7 +1074,7 @@
   top: 0;
   /* auto: иначе с pointer-events:none на <svg> дочерние path не получают клики (удаление связи) */
   pointer-events: auto;
-  z-index: 0;
+  z-index: 1;
 }
 
 .lines-layer path {
@@ -1084,7 +1104,7 @@
 
 .cards-layer {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   /* Пустые области слоя не перекрывают SVG с линиями — клик доходит до «невидимой» обводки связи */
   pointer-events: none;
 }
@@ -1816,6 +1836,221 @@
   min-width: 0;
 }
 
+.profile-stats-head-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.profile-stats-project-meta {
+  margin: 0.35rem 0 0;
+  font-size: 0.9rem;
+  color: #7b7064;
+  line-height: 1.35;
+}
+
+.profile-stats-project-id {
+  font-variant-numeric: tabular-nums;
+  color: #9a8f82;
+}
+
+.export-graphic-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(47, 40, 33, 0.45);
+  pointer-events: all;
+}
+
+.export-graphic-overlay-text {
+  margin: 0;
+  padding: 1rem 1.35rem;
+  border-radius: 14px;
+  background: #fffdfb;
+  color: #2f2821;
+  font-size: 0.95rem;
+  font-weight: 600;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+
+.project-stats-export-image {
+  max-width: 36rem;
+}
+
+.project-stats-export-btn {
+  margin-top: 0.25rem;
+}
+
+.project-stats-section {
+  max-width: 36rem;
+}
+
+.profile-page .stats-dl--profile {
+  margin: 0;
+  padding: 0;
+}
+
+.profile-page .stats-dl--profile .stats-dl-row {
+  border-bottom-color: rgba(86, 72, 58, 0.1);
+  font-size: 0.875rem;
+}
+
+.profile-page .stats-dl--profile .stats-dl-row dt {
+  color: #7b7064;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.profile-page .stats-dl--profile .stats-dl-row dd {
+  color: #2f2821;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.invite-login-callout {
+  margin-bottom: 1.1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  background: rgba(176, 122, 77, 0.12);
+  border: 1px solid rgba(86, 72, 58, 0.12);
+}
+
+.invite-login-callout-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #2f2821;
+}
+
+.invite-login-callout-owner {
+  margin-top: 0.35rem;
+}
+
+.project-stats-share {
+  max-width: min(52rem, 100%);
+}
+
+.project-stats-share-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #2f2821;
+}
+
+.project-stats-share-hint {
+  margin-bottom: 0.75rem;
+}
+
+.project-stats-share-create {
+  margin-bottom: 0.85rem;
+}
+
+.project-stats-invites-table-wrap {
+  margin-top: 0.25rem;
+}
+
+.project-stats-invites-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+  color: #2f2821;
+}
+
+.project-stats-invites-table th,
+.project-stats-invites-table td {
+  text-align: left;
+  padding: 0.5rem 0.55rem;
+  border-bottom: 1px solid rgba(86, 72, 58, 0.12);
+  vertical-align: top;
+}
+
+.project-stats-invites-table th {
+  font-weight: 700;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #7b7064;
+}
+
+.project-stats-invites-th-actions {
+  min-width: 11rem;
+}
+
+.project-stats-invites-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.project-stats-invite-annul-btn {
+  padding: 0.35rem 0.55rem;
+  font-size: 0.75rem;
+  color: #6b5344;
+}
+
+.project-stats-invites-url-cell {
+  max-width: 14rem;
+}
+
+.project-stats-invites-url {
+  display: block;
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  word-break: break-all;
+  color: #4a433a;
+}
+
+.project-stats-invite-copy-btn {
+  padding: 0.35rem 0.55rem;
+  font-size: 0.75rem;
+}
+
+.project-stats-invites-empty {
+  margin: 0.35rem 0 0;
+}
+
+.project-stats-share-error {
+  margin-top: 0.5rem;
+  color: #8b4513;
+}
+
+.profile-page--invite-accept .invite-accept-section {
+  max-width: 40rem;
+}
+
+.invite-accept-lead {
+  margin: 0 0 0.65rem;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: #2f2821;
+}
+
+.invite-accept-confirm {
+  margin: 0.85rem 0 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #2f2821;
+}
+
+.invite-accept-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.invite-accept-action-error {
+  margin-top: 0.65rem;
+  color: #8b4513;
+}
+
 .profile-create-row input {
   min-width: 0;
   border: 1px solid rgba(86, 72, 58, 0.12) !important;
@@ -1954,10 +2189,14 @@
   font-size: 0.73rem;
 }
 
-.profile-project-delete {
+.profile-project-menu-root {
   position: absolute;
   top: 0.58rem;
   right: 0.58rem;
+  z-index: 4;
+}
+
+.profile-project-menu-trigger {
   width: 1.95rem;
   height: 1.95rem;
   padding: 0;
@@ -1968,23 +2207,65 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  z-index: 2;
 }
 
-.profile-project-delete-icon {
-  width: 1rem;
-  height: 1rem;
+.profile-project-menu-icon {
+  width: 1.15rem;
+  height: 1.15rem;
   object-fit: contain;
   filter: brightness(0) invert(0.2);
   opacity: 0.72;
 }
 
-.profile-project-delete:hover {
+.profile-project-menu-trigger:hover {
   background: rgba(47, 40, 33, 0.08);
 }
 
-.profile-project-delete:hover .profile-project-delete-icon {
+.profile-project-menu-trigger:hover .profile-project-menu-icon {
   opacity: 1;
+}
+
+.profile-project-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 10.5rem;
+  padding: 6px;
+  border: 1px solid rgba(86, 72, 58, 0.1);
+  border-radius: 12px;
+  background: #fffdfb;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+
+.profile-project-menu-item {
+  width: 100%;
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 0.82rem;
+  color: #2f2821;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.profile-project-menu-item:hover {
+  background: #f4ece3;
+}
+
+.profile-project-menu-item--danger {
+  color: #8b3a3a;
+}
+
+.profile-project-menu-item--danger:hover {
+  background: rgba(139, 58, 58, 0.1);
 }
 
 .profile-rename-inline {
