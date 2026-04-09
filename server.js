@@ -277,6 +277,15 @@ if (!hasColumn("projects", "share_for_matching")) {
     db.prepare("UPDATE projects SET share_for_matching = ? WHERE id = ?").run(sm, r.id);
   }
 }
+if (!hasColumn("projects", "import_source_owner_uid")) {
+  db.exec("ALTER TABLE projects ADD COLUMN import_source_owner_uid INTEGER;");
+}
+if (!hasColumn("projects", "import_source_owner_name")) {
+  db.exec("ALTER TABLE projects ADD COLUMN import_source_owner_name TEXT;");
+}
+if (!hasColumn("projects", "import_source_project_id")) {
+  db.exec("ALTER TABLE projects ADD COLUMN import_source_project_id INTEGER;");
+}
 db.exec("CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner_user_id);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_cards_owner ON shared_card_index(owner_user_id);");
 db.exec("CREATE INDEX IF NOT EXISTS idx_cards_fio ON shared_card_index(fio_norm);");
@@ -733,7 +742,8 @@ api.get("/projects", requireAuth, (req, res) => {
     const ownerId = Number(req.user.id);
     const rows = db
       .prepare(
-        `SELECT id, name, updated_at, COALESCE(share_for_matching, 0) AS share_for_matching, profile_json
+        `SELECT id, name, updated_at, COALESCE(share_for_matching, 0) AS share_for_matching, profile_json,
+                import_source_owner_uid, import_source_owner_name, import_source_project_id
          FROM projects WHERE owner_user_id = ? ORDER BY updated_at DESC`
       )
       .all(ownerId);
@@ -752,6 +762,9 @@ api.get("/projects", requireAuth, (req, res) => {
         name: row.name,
         updated_at: row.updated_at,
         shareForMatching,
+        importSourceOwnerUid: row.import_source_owner_uid != null ? Number(row.import_source_owner_uid) : null,
+        importSourceOwnerName: String(row.import_source_owner_name || "").trim() || null,
+        importSourceProjectId: row.import_source_project_id != null ? Number(row.import_source_project_id) : null,
       };
     });
     res.json(out);
@@ -918,6 +931,145 @@ function handleMatchingRebuild(_req, res) {
 
 api.get("/matching/rebuild", requireAuth, handleMatchingRebuild);
 api.post("/matching/rebuild", requireAuth, handleMatchingRebuild);
+
+api.post("/matching/import-project", requireAuth, (req, res) => {
+  const sourceProjectId = Number(req.body?.projectId);
+  const sourceOwnerUid = Number(req.body?.ownerUid || 0);
+  if (!Number.isFinite(sourceProjectId) || sourceProjectId <= 0) {
+    res.status(400).json({ error: "project_id_required" });
+    return;
+  }
+  const src = db
+    .prepare(
+      `SELECT p.*, u.uid AS owner_uid, u.full_name AS owner_full_name
+       FROM projects p
+       JOIN users u ON u.id = p.owner_user_id
+       WHERE p.id = ? AND p.owner_user_id IS NOT NULL AND COALESCE(p.share_for_matching, 0) = 1`
+    )
+    .get(sourceProjectId);
+  if (!src) {
+    res.status(404).json({ error: "source_project_not_found_or_not_shared" });
+    return;
+  }
+  if (sourceOwnerUid > 0 && Number(src.owner_uid) !== sourceOwnerUid) {
+    res.status(404).json({ error: "source_owner_uid_mismatch" });
+    return;
+  }
+  const targetOwnerId = Number(req.user.id);
+  if (Number(src.owner_user_id) === targetOwnerId) {
+    res.status(400).json({ error: "cannot_import_own_project" });
+    return;
+  }
+
+  let profileObj = null;
+  try {
+    profileObj = src.profile_json ? JSON.parse(src.profile_json) : null;
+  } catch {
+    profileObj = null;
+  }
+  if (profileObj && typeof profileObj === "object") {
+    profileObj.shareForMatching = false;
+  }
+
+  const now = Date.now();
+  const baseName = String(src.name || "Проект").trim() || "Проект";
+  const clonedName = `${baseName} (копия)`.slice(0, 200);
+  const info = db
+    .prepare(
+      `INSERT INTO projects
+        (name, updated_at, field_w, field_h, cam_x, cam_y, zoom, profile_json, cards_json, links_json, owner_user_id, share_for_matching,
+         import_source_owner_uid, import_source_owner_name, import_source_project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`
+    )
+    .run(
+      clonedName,
+      now,
+      Math.round(Number(src.field_w) || 0),
+      Math.round(Number(src.field_h) || 0),
+      Number(src.cam_x) || 0,
+      Number(src.cam_y) || 0,
+      Number(src.zoom) || 1,
+      profileObj ? JSON.stringify(profileObj) : src.profile_json,
+      String(src.cards_json || "[]"),
+      String(src.links_json || "[]"),
+      targetOwnerId,
+      Number(src.owner_uid),
+      String(src.owner_full_name || "").trim() || null,
+      sourceProjectId
+    );
+
+  res.json({
+    ok: true,
+    importedProject: {
+      id: Number(info.lastInsertRowid),
+      name: clonedName,
+      ownerUid: req.user.uid,
+      copiedFrom: {
+        projectId: sourceProjectId,
+        ownerUid: Number(src.owner_uid),
+      },
+      updated_at: now,
+    },
+  });
+});
+
+api.get("/matching/shared-project", requireAuth, (req, res) => {
+  const sourceProjectId = Number(req.query.projectId);
+  const sourceOwnerUid = Number(req.query.ownerUid || 0);
+  if (!Number.isFinite(sourceProjectId) || sourceProjectId <= 0 || !Number.isFinite(sourceOwnerUid) || sourceOwnerUid <= 0) {
+    res.status(400).json({ error: "project_id_and_owner_uid_required" });
+    return;
+  }
+  const row = db
+    .prepare(
+      `SELECT p.id, p.name, p.updated_at, p.field_w, p.field_h, p.cam_x, p.cam_y, p.zoom,
+              p.profile_json, p.cards_json, p.links_json, p.owner_user_id, COALESCE(p.share_for_matching, 0) AS share_for_matching,
+              u.uid AS owner_uid, u.full_name AS owner_full_name
+       FROM projects p
+       JOIN users u ON u.id = p.owner_user_id
+       WHERE p.id = ? AND u.uid = ? AND p.owner_user_id IS NOT NULL AND COALESCE(p.share_for_matching, 0) = 1`
+    )
+    .get(sourceProjectId, sourceOwnerUid);
+  if (!row) {
+    res.status(404).json({ error: "shared_project_not_found" });
+    return;
+  }
+  let profile = null;
+  try {
+    profile = row.profile_json ? JSON.parse(row.profile_json) : null;
+  } catch {
+    profile = null;
+  }
+  let cards = [];
+  let links = [];
+  try {
+    cards = JSON.parse(row.cards_json || "[]");
+  } catch {
+    cards = [];
+  }
+  try {
+    links = JSON.parse(row.links_json || "[]");
+  } catch {
+    links = [];
+  }
+  res.json({
+    id: row.id,
+    name: row.name,
+    updated_at: row.updated_at,
+    fieldW: row.field_w,
+    fieldH: row.field_h,
+    camX: row.cam_x,
+    camY: row.cam_y,
+    zoom: row.zoom,
+    profile,
+    shareForMatching: Number(row.share_for_matching) === 1,
+    cards,
+    links,
+    readOnly: true,
+    ownerUid: Number(row.owner_uid),
+    ownerName: String(row.owner_full_name || "").trim() || null,
+  });
+});
 
 api.get("/matching/suggestions", requireAuth, (req, res) => {
   const myOwnerId = Number(req.user.id);

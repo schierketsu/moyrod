@@ -75,6 +75,7 @@ export const useTreeStore = defineStore("tree", {
     projects: [],
     currentProjectId: null,
     currentProjectName: "Мой проект",
+    currentProjectReadOnly: false,
     lastProjectUpdatedAt: null,
     cards: [],
     links: [],
@@ -170,6 +171,7 @@ export const useTreeStore = defineStore("tree", {
     clearProjectSession() {
       this.currentProjectId = null;
       this.currentProjectName = "";
+      this.currentProjectReadOnly = false;
       this.lastProjectUpdatedAt = null;
       this.cards = [];
       this.links = [];
@@ -205,6 +207,7 @@ export const useTreeStore = defineStore("tree", {
     },
 
     async setShareForMatching(nextValue) {
+      if (this.currentProjectReadOnly) return;
       const next = nextValue === true;
       if (this.shareForMatching === next) return;
       const prev = this.shareForMatching;
@@ -264,6 +267,7 @@ export const useTreeStore = defineStore("tree", {
       this.loadingProject = true;
       try {
         const data = await projectsApi.getProject(id);
+        this.currentProjectReadOnly = false;
         this.currentProjectId = data.id;
         this.currentProjectName = data.name || "Без названия";
         this.lastProjectUpdatedAt = data.updated_at || null;
@@ -318,6 +322,31 @@ export const useTreeStore = defineStore("tree", {
       }
     },
 
+    async openSharedProject(projectId, ownerUid) {
+      this.loadingProject = true;
+      try {
+        const data = await projectsApi.getSharedMatchingProject(projectId, ownerUid);
+        this.currentProjectReadOnly = true;
+        this.currentProjectId = data.id;
+        this.currentProjectName = data.name || "Проект";
+        this.lastProjectUpdatedAt = data.updated_at || null;
+        this.fieldW = Math.max(1000, Number(data.fieldW) || 2000);
+        this.fieldH = Math.max(800, Number(data.fieldH) || 1400);
+        this.camX = Number(data.camX) || this.fieldW / 2;
+        this.camY = Number(data.camY) || this.fieldH / 2;
+        this.zoom = Number(data.zoom) || 1;
+        this.cards = Array.isArray(data.cards) ? data.cards : [];
+        this.links = Array.isArray(data.links) ? data.links : [];
+        this.shareForMatching = false;
+        this.showWelcome = this.cards.length === 0;
+        this.pendingLinkDeletePayload = null;
+        this.pendingCardDeleteId = null;
+        this.hasUnsavedChanges = false;
+      } finally {
+        this.loadingProject = false;
+      }
+    },
+
     setViewport(camX, camY, zoom, persist = true) {
       this.camX = Math.max(0, Math.min(this.fieldW, camX));
       this.camY = Math.max(0, Math.min(this.fieldH, camY));
@@ -361,6 +390,7 @@ export const useTreeStore = defineStore("tree", {
     },
 
     addCard(payload) {
+      if (this.currentProjectReadOnly) return null;
       const card = {
         id: payload.id || uid(),
         x: payload.x ?? this.fieldW / 2,
@@ -382,6 +412,7 @@ export const useTreeStore = defineStore("tree", {
     },
 
     patchCard(id, patch) {
+      if (this.currentProjectReadOnly) return;
       const c = this.cards.find((x) => x.id === id);
       if (!c) return;
       Object.assign(c, patch);
@@ -391,12 +422,14 @@ export const useTreeStore = defineStore("tree", {
     },
 
     removeCard(id) {
+      if (this.currentProjectReadOnly) return;
       this.cards = this.cards.filter((c) => c.id !== id);
       this.links = this.links.filter((l) => l.from !== id && l.to !== id && l.a !== id && l.b !== id && l.child !== id);
       this.markDirty();
     },
 
     addLineageLink(from, to) {
+      if (this.currentProjectReadOnly) return;
       if (from === to) return;
       if (this.links.some((l) => (l.kind || "lineage") === "lineage" && l.from === from && l.to === to)) return;
       this.links.push({ kind: "lineage", from, to });
@@ -404,6 +437,7 @@ export const useTreeStore = defineStore("tree", {
     },
 
     addSpouseLink(a, b) {
+      if (this.currentProjectReadOnly) return;
       if (a === b) return;
       if (this.links.some((l) => l.kind === "spouse" && ((l.a === a && l.b === b) || (l.a === b && l.b === a)))) return;
       this.links.push({ kind: "spouse", a, b });
@@ -411,12 +445,14 @@ export const useTreeStore = defineStore("tree", {
     },
 
     addChildOfUnionLink(a, b, child) {
+      if (this.currentProjectReadOnly) return;
       if (this.links.some((l) => l.kind === "childOfUnion" && l.a === a && l.b === b && l.child === child)) return;
       this.links.push({ kind: "childOfUnion", a, b, child });
       this.markDirty();
     },
 
     requestLinkDelete(payload) {
+      if (this.currentProjectReadOnly) return;
       this.pendingLinkDeletePayload = payload || null;
     },
 
@@ -425,6 +461,7 @@ export const useTreeStore = defineStore("tree", {
     },
 
     requestCardDelete(cardId) {
+      if (this.currentProjectReadOnly) return;
       this.pendingCardDeleteId = cardId || null;
     },
 
@@ -433,6 +470,7 @@ export const useTreeStore = defineStore("tree", {
     },
 
     confirmLinkDelete() {
+      if (this.currentProjectReadOnly) return;
       const p = this.pendingLinkDeletePayload;
       if (!p || !p.kind) return;
       if (p.kind === "lineage") {
@@ -451,6 +489,7 @@ export const useTreeStore = defineStore("tree", {
     },
 
     confirmCardDelete() {
+      if (this.currentProjectReadOnly) return;
       if (!this.pendingCardDeleteId) return;
       const cardId = this.pendingCardDeleteId;
       this.pendingCardDeleteId = null;
@@ -508,10 +547,12 @@ export const useTreeStore = defineStore("tree", {
     },
 
     markDirty() {
+      if (this.currentProjectReadOnly) return;
       this.hasUnsavedChanges = true;
     },
 
     async saveNow() {
+      if (this.currentProjectReadOnly) return false;
       if (!this.apiAvailable || this.loadingProject || this.currentProjectId == null) return false;
       if (!this.hasUnsavedChanges || this.isSaving) return false;
       this.isSaving = true;

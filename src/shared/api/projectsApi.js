@@ -83,4 +83,17 @@ export const projectsApi = {
   suggestPlaces(query) {
     return getJson(`/api/places/suggest?q=${encodeURIComponent(query)}`);
   },
+  importMatchingProject(projectId, ownerUid) {
+    return sendJson("/api/matching/import-project", "POST", {
+      projectId: Number(projectId),
+      ownerUid: ownerUid != null ? Number(ownerUid) : undefined,
+    });
+  },
+  getSharedMatchingProject(projectId, ownerUid) {
+    return getJson(
+      `/api/matching/shared-project?projectId=${encodeURIComponent(Number(projectId))}&ownerUid=${encodeURIComponent(
+        Number(ownerUid)
+      )}`
+    );
+  },
 };

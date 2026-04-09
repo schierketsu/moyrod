@@ -83,6 +83,7 @@ export function useCards(store, viewport) {
   }
 
   function startDrag(ev, card) {
+    if (store.currentProjectReadOnly) return;
     if (card.pinned) return;
     if (ev.button !== 0) return;
     if (ev.target.closest(".card-icon-btn")) return;
@@ -206,6 +207,7 @@ export function useCards(store, viewport) {
   }
 
   function addCardFromDraft() {
+    if (store.currentProjectReadOnly) return;
     const d = store.newCardDraft;
     const isUnknown = !d.fio && !d.birth && !d.birthPlace;
     const desired = clampToField(store.camX - 116, store.camY - 102);
@@ -242,6 +244,7 @@ export function useCards(store, viewport) {
   }
 
   function openEdit(cardId) {
+    if (store.currentProjectReadOnly) return;
     const c = store.cards.find((x) => x.id === cardId);
     if (!c) return;
     store.editingCardId = cardId;
@@ -259,6 +262,7 @@ export function useCards(store, viewport) {
   }
 
   function saveEdit() {
+    if (store.currentProjectReadOnly) return;
     if (!store.editingCardId) return;
     const d = store.editDraft;
     const empty = !d.fio && !d.birth && !d.birthPlace;

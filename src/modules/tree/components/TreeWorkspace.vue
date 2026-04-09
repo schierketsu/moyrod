@@ -38,19 +38,49 @@
             :style="cardStyle(card)"
             @pointerdown="onCardPointerDown($event, card.id)"
           >
-            <button class="card-port card-port--top" type="button" @pointerdown.stop="portDown(card.id, 'top')" />
-            <button class="card-port card-port--left" type="button" @pointerdown.stop="portDown(card.id, 'left')" />
-            <button class="card-port card-port--right" type="button" @pointerdown.stop="portDown(card.id, 'right')" />
+            <button
+              v-if="!store.currentProjectReadOnly"
+              class="card-port card-port--top"
+              type="button"
+              @pointerdown.stop="portDown(card.id, 'top')"
+            />
+            <button
+              v-if="!store.currentProjectReadOnly"
+              class="card-port card-port--left"
+              type="button"
+              @pointerdown.stop="portDown(card.id, 'left')"
+            />
+            <button
+              v-if="!store.currentProjectReadOnly"
+              class="card-port card-port--right"
+              type="button"
+              @pointerdown.stop="portDown(card.id, 'right')"
+            />
             <div class="card-drag" :class="{ 'card-drag--labeled': !!card.title }" @pointerdown.prevent.stop="startDrag($event, card)">
-              <button type="button" class="card-icon-btn card-pin" @click.stop="store.patchCard(card.id, { pinned: !card.pinned })">
+              <button
+                v-if="!store.currentProjectReadOnly"
+                type="button"
+                class="card-icon-btn card-pin"
+                @click.stop="store.patchCard(card.id, { pinned: !card.pinned })"
+              >
                 <img class="card-icon-img" src="/icons/pin.png" width="18" height="18" alt="" />
               </button>
               <span class="card-drag-label">{{ card.title || "" }}</span>
               <div class="card-drag-actions">
-                <button type="button" class="card-icon-btn card-edit" @click.stop="openEdit(card.id)">
+                <button
+                  v-if="!store.currentProjectReadOnly"
+                  type="button"
+                  class="card-icon-btn card-edit"
+                  @click.stop="openEdit(card.id)"
+                >
                   <img class="card-icon-img" src="/icons/edit.png" width="18" height="18" alt="" />
                 </button>
-                <button type="button" class="card-icon-btn card-remove" @click.stop="store.requestCardDelete(card.id)">
+                <button
+                  v-if="!store.currentProjectReadOnly"
+                  type="button"
+                  class="card-icon-btn card-remove"
+                  @click.stop="store.requestCardDelete(card.id)"
+                >
                   <img class="card-icon-img" src="/icons/garbage.png" width="18" height="18" alt="" />
                 </button>
               </div>
@@ -106,6 +136,7 @@
           </article>
         </div>
         <div
+          v-if="!store.currentProjectReadOnly"
           v-for="u in unionNodes"
           :key="u.key"
           class="union-node"
@@ -135,7 +166,7 @@
       </div>
     </main>
     <button
-      v-if="store.currentProjectId"
+      v-if="store.currentProjectId && !store.currentProjectReadOnly"
       type="button"
       class="fab-save"
       aria-label="Сохранить проект"
@@ -146,6 +177,7 @@
     </button>
     <button
       v-if="store.currentProjectId"
+      v-show="!store.currentProjectReadOnly"
       type="button"
       class="fab-add"
       aria-label="Добавить карточку"

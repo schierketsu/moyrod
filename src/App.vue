@@ -142,6 +142,25 @@
           </div>
         </div>
       </div>
+      <div
+        v-if="pendingImportRecommendation"
+        class="link-delete-banner"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="import-project-banner-title"
+      >
+        <div class="link-delete-banner-inner">
+          <p id="import-project-banner-title" class="link-delete-banner-text">
+            {{ importProjectBannerText }}
+          </p>
+          <div class="link-delete-banner-actions">
+            <button type="button" class="btn link-delete-banner-cancel" @click="cancelImportRecommendation">Отмена</button>
+            <button type="button" class="btn primary link-delete-banner-confirm" @click="confirmImportRecommendation">
+              Добавить
+            </button>
+          </div>
+        </div>
+      </div>
     </header>
 
     <template v-if="route.path !== '/myprofile'">
@@ -196,7 +215,12 @@
               <h3 class="profile-project-name">{{ project.name || "Без названия" }}</h3>
               <p class="profile-project-meta">ID {{ project.id }}</p>
             </header>
-            <label class="profile-project-share-row" @click.stop @keydown.stop>
+            <label
+              v-if="!project.importSourceOwnerUid"
+              class="profile-project-share-row"
+              @click.stop
+              @keydown.stop
+            >
               <input
                 type="checkbox"
                 :checked="project.shareForMatching === true"
@@ -204,6 +228,9 @@
               />
               <span>Участвовать в поиске родственников</span>
             </label>
+            <p v-else class="profile-project-import-meta">
+              Проект принадлежит пользователю {{ project.importSourceOwnerName || `UID ${project.importSourceOwnerUid}` }}
+            </p>
           </article>
         </div>
           <p v-if="!tree.projects.length" class="profile-empty-state">У вас пока нет проектов. Создайте первый проект.</p>
@@ -236,7 +263,26 @@
                 </div>
                 <div class="profile-matching-avatar-placeholder" aria-hidden="true"></div>
               </div>
-              <small>UID {{ item.other?.ownerUid ?? item.other?.ownerUserId }}</small>
+              <div class="profile-matching-card-actions">
+                <button
+                  type="button"
+                  class="profile-matching-action-btn"
+                  title="Открыть проект"
+                  aria-label="Открыть проект"
+                  @click="openRecommendedProject(item)"
+                >
+                  <img src="/icons/open.png" width="18" height="18" alt="" />
+                </button>
+                <button
+                  type="button"
+                  class="profile-matching-action-btn"
+                  title="Добавить в коллекцию"
+                  aria-label="Добавить в коллекцию"
+                  @click="addRecommendedProject(item)"
+                >
+                  <img src="/icons/add.png" width="18" height="18" alt="" />
+                </button>
+              </div>
             </div>
           </div>
           <p v-else class="welcome-text">{{ matchingHint || "Пока нет рекомендаций." }}</p>
@@ -280,6 +326,7 @@ const userMenuRoot = ref(null);
 const newProjectName = ref("");
 const matching = ref([]);
 const matchingHint = ref("");
+const pendingImportRecommendation = ref(null);
 const showCreateInput = ref(false);
 const createInputRef = ref(null);
 const loginForm = reactive({ uid: "", password: "" });
@@ -322,6 +369,11 @@ const linkDeleteBannerText = computed(() => {
   if (p.kind === "spouse") return "Удалить связь пары?";
   if (p.kind === "childOfUnion") return "Удалить связь?";
   return "Удалить родительскую связь?";
+});
+const importProjectBannerText = computed(() => {
+  const item = pendingImportRecommendation.value;
+  const fio = String(item?.other?.fio || item?.mine?.fio || "этот проект").trim() || "этот проект";
+  return `Добавить проект с совпадением «${fio}» в вашу коллекцию?`;
 });
 
 watch(
@@ -512,6 +564,47 @@ async function toggleProjectShare(project, event) {
     await loadMatching();
   } catch (e) {
     matchingHint.value = `Не удалось сохранить участие в подборе: ${e?.message || String(e)}`.trim();
+  }
+}
+
+async function importRecommendedProject(item) {
+  const sourceProjectId = Number(item?.other?.projectId);
+  if (!Number.isFinite(sourceProjectId) || sourceProjectId <= 0) return;
+  pendingImportRecommendation.value = item;
+}
+
+function addRecommendedProject(item) {
+  importRecommendedProject(item);
+}
+
+async function openRecommendedProject(item) {
+  const sourceProjectId = Number(item?.other?.projectId);
+  const sourceOwnerUid = Number(item?.other?.ownerUid || 0) || null;
+  if (!Number.isFinite(sourceProjectId) || sourceProjectId <= 0) return;
+  try {
+    await tree.openSharedProject(sourceProjectId, sourceOwnerUid);
+    if (route.path === "/myprofile") await router.push("/");
+  } catch (e) {
+    matchingHint.value = `Не удалось открыть проект: ${e?.message || String(e)}`.trim();
+  }
+}
+
+function cancelImportRecommendation() {
+  pendingImportRecommendation.value = null;
+}
+
+async function confirmImportRecommendation() {
+  const item = pendingImportRecommendation.value;
+  if (!item) return;
+  const sourceProjectId = Number(item?.other?.projectId);
+  const sourceOwnerUid = Number(item?.other?.ownerUid || 0) || null;
+  pendingImportRecommendation.value = null;
+  try {
+    await projectsApi.importMatchingProject(sourceProjectId, sourceOwnerUid);
+    await tree.refreshProjects();
+    matchingHint.value = "Проект добавлен в вашу коллекцию.";
+  } catch (e) {
+    matchingHint.value = `Не удалось добавить проект: ${e?.message || String(e)}`.trim();
   }
 }
 

@@ -152,6 +152,7 @@ export function useGraph(store) {
   });
 
   function portDown(cardId, port) {
+    if (store.currentProjectReadOnly) return;
     if (pendingUnion.value) {
       const u = pendingUnion.value;
       pendingUnion.value = null;
@@ -178,6 +179,7 @@ export function useGraph(store) {
   }
 
   function armUnion(a, b) {
+    if (store.currentProjectReadOnly) return;
     const same = pendingUnion.value && pendingUnion.value.a === a && pendingUnion.value.b === b;
     pendingUnion.value = same ? null : { a, b };
     pendingPort.value = null;
