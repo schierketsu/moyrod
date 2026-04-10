@@ -1,14 +1,20 @@
 import { computed, ref } from "vue";
 
+function cloneNotesImages(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.map((x) => ({
+    id: x?.id || `ni_${Math.random().toString(36).slice(2, 11)}`,
+    dataUrl: typeof x?.dataUrl === "string" ? x.dataUrl : "",
+    name: typeof x?.name === "string" ? x.name : "",
+  }));
+}
+
 export function useCards(store, viewport) {
   const drag = ref(null);
   const editingCard = computed(() => store.cards.find((c) => c.id === store.editingCardId) || null);
   const CARD_W = 232;
-  /** Совпадает с визуальной высотой карточки (--card-min-h), без лишнего «запаса». */
   const CARD_H = 204;
-  /** Зазор при отпускании — карточки не наезжают друг на друга. */
   const GAP_RELEASE = 14;
-  /** Во время перетаскивания — меньше, чтобы не «цеплялось» за соседей. */
   const GAP_DRAG = 6;
   const sizeCache = new Map();
 
@@ -224,6 +230,9 @@ export function useCards(store, viewport) {
       uncertainBirth: d.uncertainBirth === true,
       uncertainBirthPlace: d.uncertainBirthPlace === true,
       isUnknown,
+      vovParticipant: d.vovParticipant === true,
+      notesText: typeof d.notesText === "string" ? d.notesText : "",
+      notesImages: Array.isArray(d.notesImages) ? cloneNotesImages(d.notesImages) : [],
     });
     store.newCardDraft = {
       fio: "",
@@ -234,6 +243,9 @@ export function useCards(store, viewport) {
       uncertainFio: false,
       uncertainBirth: false,
       uncertainBirthPlace: false,
+      vovParticipant: false,
+      notesText: "",
+      notesImages: [],
     };
     store.showNewCardPanel = false;
   }
@@ -257,8 +269,18 @@ export function useCards(store, viewport) {
       uncertainFio: c.uncertainFio === true,
       uncertainBirth: c.uncertainBirth === true,
       uncertainBirthPlace: c.uncertainBirthPlace === true,
+      vovParticipant: c.vovParticipant === true,
+      notesText: typeof c.notesText === "string" ? c.notesText : "",
+      notesImages: cloneNotesImages(c.notesImages),
     };
     store.showEditCardPanel = true;
+  }
+
+  function toggleEditVovParticipant() {
+    if (store.currentProjectReadOnly || !store.editingCardId) return;
+    const next = !store.editDraft.vovParticipant;
+    store.editDraft.vovParticipant = next;
+    store.patchCard(store.editingCardId, { vovParticipant: next });
   }
 
   function saveEdit() {
@@ -276,6 +298,9 @@ export function useCards(store, viewport) {
       uncertainBirth: empty ? false : d.uncertainBirth === true,
       uncertainBirthPlace: empty ? false : d.uncertainBirthPlace === true,
       isUnknown: empty,
+      vovParticipant: d.vovParticipant === true,
+      notesText: typeof d.notesText === "string" ? d.notesText : "",
+      notesImages: Array.isArray(d.notesImages) ? cloneNotesImages(d.notesImages) : [],
     });
     store.showEditCardPanel = false;
     store.editingCardId = null;
@@ -298,5 +323,6 @@ export function useCards(store, viewport) {
     saveEdit,
     closeNewPanel,
     closeEditPanel,
+    toggleEditVovParticipant,
   };
 }

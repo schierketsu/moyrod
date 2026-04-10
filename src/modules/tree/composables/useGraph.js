@@ -10,7 +10,6 @@ function cardBorderWidth(card) {
 function cardLayout(card) {
   const border = cardBorderWidth(card);
   const el = typeof document !== "undefined" ? document.getElementById(card.id) : null;
-  // clientHeight excludes border and matches port positioning context (padding box).
   const contentH = el?.clientHeight || CARD_H;
   return {
     border,
@@ -18,12 +17,69 @@ function cardLayout(card) {
   };
 }
 
-function center(card) {
+/** Центр верхнего / нижнего порта (ребёнок у союза или вертикальная линия родства). */
+function verticalPortPoint(card, edge) {
   const m = cardLayout(card);
-  return { x: card.x + m.border + CARD_W / 2, y: card.y + m.border + m.contentH / 2 };
+  const x = card.x + m.border + CARD_W / 2;
+  if (edge === "bottom") return { x, y: card.y + m.border + m.contentH };
+  return { x, y: card.y + m.border };
 }
 
-function sideCenterPoints(a, b) {
+/** Центр бокового порта (связь пары супругов). */
+function sidePortPoint(card, side) {
+  const m = cardLayout(card);
+  const y = card.y + m.border + m.contentH / 2;
+  if (side === "right") return { x: card.x + m.border + CARD_W, y };
+  return { x: card.x + m.border, y };
+}
+
+function spouseCurvePath(from, to) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dist = Math.hypot(dx, dy);
+  const dir = dx >= 0 ? 1 : -1;
+  const bend = Math.max(28, Math.min(120, dist * 0.28));
+  const c1x = from.x + dir * bend;
+  const c2x = to.x - dir * bend;
+  const yShift = Math.max(-34, Math.min(34, dy * 0.22));
+  const c1y = from.y + yShift;
+  const c2y = to.y - yShift;
+  return `M ${from.x} ${from.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${to.x} ${to.y}`;
+}
+
+/** Карточки почти в одной колонне (центры портов по X близко). */
+const VERTICAL_STACK_EPS_X = 34;
+
+function isBottomTopPortPair(fromPort, toPort) {
+  const f = String(fromPort);
+  const t = String(toPort);
+  return (f === "bottom" && t === "top") || (f === "top" && t === "bottom");
+}
+
+/** Нижний↔верхний порт и «столбик» — прямая вертикаль вместо S-образной кривой. */
+function pathBetweenPortEndpoints(fromPt, toPt, fromPort, toPort) {
+  if (
+    fromPort != null &&
+    toPort != null &&
+    isBottomTopPortPair(fromPort, toPort) &&
+    Math.abs(fromPt.x - toPt.x) <= VERTICAL_STACK_EPS_X
+  ) {
+    const x = (fromPt.x + toPt.x) / 2;
+    return `M ${x} ${fromPt.y} L ${x} ${toPt.y}`;
+  }
+  return spouseCurvePath(fromPt, toPt);
+}
+
+/** Линия родства между боковыми портами. */
+function sideLineagePath(a, b) {
+  const midX = a.x + (b.x - a.x) * 0.5;
+  const c1y = a.y + (b.y - a.y) * 0.35;
+  const c2y = b.y - (b.y - a.y) * 0.35;
+  return `M ${a.x} ${a.y} C ${midX} ${c1y}, ${midX} ${c2y}, ${b.x} ${b.y}`;
+}
+
+/** Старая геометрия пары (бок ↔ бок), если в данных нет anchor. */
+function sideCenterSpousePoints(a, b) {
   const ma = cardLayout(a);
   const mb = cardLayout(b);
   const ay = a.y + ma.border + ma.contentH / 2;
@@ -40,20 +96,82 @@ function sideCenterPoints(a, b) {
   };
 }
 
-function spouseCurvePath(from, to) {
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
-  const dist = Math.hypot(dx, dy);
-  const dir = dx >= 0 ? 1 : -1;
-  // Мягкий горизонтальный изгиб: чем дальше карточки, тем плавнее дуга.
-  const bend = Math.max(28, Math.min(120, dist * 0.28));
-  const c1x = from.x + dir * bend;
-  const c2x = to.x - dir * bend;
-  // Небольшая компенсация по Y, чтобы линия выглядела живее при вертикальном смещении карточек.
-  const yShift = Math.max(-34, Math.min(34, dy * 0.22));
-  const c1y = from.y + yShift;
-  const c2y = to.y - yShift;
-  return `M ${from.x} ${from.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${to.x} ${to.y}`;
+function cardCenter(card) {
+  const m = cardLayout(card);
+  return { x: card.x + m.border + CARD_W / 2, y: card.y + m.border + m.contentH / 2 };
+}
+
+/** Старые проекты: родство сверху вниз (низ верхней карточки → верх нижней). */
+function legacyLineageVerticalPath(from, to) {
+  const mf = cardLayout(from);
+  const mt = cardLayout(to);
+  const a = { x: from.x + mf.border + CARD_W / 2, y: from.y + mf.border + mf.contentH };
+  const b = { x: to.x + mt.border + CARD_W / 2, y: to.y + mt.border };
+  if (Math.abs(a.x - b.x) <= VERTICAL_STACK_EPS_X) {
+    const x = (a.x + b.x) / 2;
+    return `M ${x} ${a.y} L ${x} ${b.y}`;
+  }
+  const cy = a.y + (b.y - a.y) * 0.48;
+  return `M ${a.x} ${a.y} C ${a.x} ${cy}, ${b.x} ${cy}, ${b.x} ${b.y}`;
+}
+
+function normalizeSide(s) {
+  return s === "right" ? "right" : "left";
+}
+
+function normalizeAnchor(a) {
+  return a === "bottom" ? "bottom" : "top";
+}
+
+function portPoint(card, portName) {
+  const p = String(portName || "left");
+  if (p === "top" || p === "bottom") return verticalPortPoint(card, normalizeAnchor(p));
+  return sidePortPoint(card, normalizeSide(p));
+}
+
+/** Кривая обычной связи: явные порты, старые боковые fromSide/toSide или вертикаль legacy. */
+function lineageCurvePath(link, fromCard, toCard) {
+  if (link.fromPort && link.toPort) {
+    return pathBetweenPortEndpoints(
+      portPoint(fromCard, link.fromPort),
+      portPoint(toCard, link.toPort),
+      link.fromPort,
+      link.toPort
+    );
+  }
+  const hasSides = link.fromSide != null && link.toSide != null;
+  if (hasSides) {
+    return sideLineagePath(
+      sidePortPoint(fromCard, normalizeSide(link.fromSide)),
+      sidePortPoint(toCard, normalizeSide(link.toSide))
+    );
+  }
+  return legacyLineageVerticalPath(fromCard, toCard);
+}
+
+/** Концы линии пары по вертикальным портам: у карты a — link.anchor, у b — anchorPartner или тот же anchor. */
+function spouseVerticalEndpoints(link, cardA, cardB) {
+  const anchorA = normalizeAnchor(link.anchor);
+  const anchorB = link.anchorPartner != null ? normalizeAnchor(link.anchorPartner) : anchorA;
+  return {
+    from: verticalPortPoint(cardA, anchorA),
+    to: verticalPortPoint(cardB, anchorB),
+  };
+}
+
+/** Геометрия пары: явные fromPort/toPort у карт a и b, иначе legacy anchor или бок по центру. */
+function spouseCurveEndpoints(link, cardA, cardB) {
+  if (link.fromPort && link.toPort) {
+    return {
+      from: portPoint(cardA, link.fromPort),
+      to: portPoint(cardB, link.toPort),
+    };
+  }
+  if (link.anchor === "top" || link.anchor === "bottom") {
+    return spouseVerticalEndpoints(link, cardA, cardB);
+  }
+  const s = sideCenterSpousePoints(cardA, cardB);
+  return { from: s.from, to: s.to };
 }
 
 export function useGraph(store) {
@@ -70,7 +188,6 @@ export function useGraph(store) {
   function scheduleInitialLayoutRecalc() {
     if (rafA) cancelAnimationFrame(rafA);
     if (rafB) cancelAnimationFrame(rafB);
-    // Двойной RAF: даём браузеру завершить layout/paint карточек после гидрации проекта.
     rafA = requestAnimationFrame(() => {
       bumpLayoutVersion();
       rafB = requestAnimationFrame(() => {
@@ -98,15 +215,16 @@ export function useGraph(store) {
       const a = byId.get(link.a);
       const b = byId.get(link.b);
       if (!a || !b) continue;
-      const ca = center(a);
-      const cb = center(b);
       const key = [link.a, link.b].sort().join("|");
+      const { from: pa, to: pb } = spouseCurveEndpoints(link, a, b);
+      const x = (pa.x + pb.x) / 2;
+      const y = (pa.y + pb.y) / 2;
       unions.push({
         key,
         a: link.a,
         b: link.b,
-        x: (ca.x + cb.x) / 2,
-        y: (ca.y + cb.y) / 2,
+        x,
+        y,
       });
     }
     return unions;
@@ -123,14 +241,10 @@ export function useGraph(store) {
         const from = byId.get(link.from);
         const to = byId.get(link.to);
         if (!from || !to) continue;
-        const mf = cardLayout(from);
-        const mt = cardLayout(to);
-        const a = { x: from.x + mf.border + CARD_W / 2, y: from.y + mf.border + mf.contentH };
-        const b = { x: to.x + mt.border + CARD_W / 2, y: to.y + mt.border };
-        const cy = a.y + (b.y - a.y) * 0.48;
+        const d = lineageCurvePath(link, from, to);
         out.push({
           key: `${kind}:${link.from}:${link.to}`,
-          d: `M ${a.x} ${a.y} C ${a.x} ${cy}, ${b.x} ${cy}, ${b.x} ${b.y}`,
+          d,
           className: "lines-layer-path",
           payload: { kind: "lineage", from: link.from, to: link.to },
         });
@@ -138,10 +252,14 @@ export function useGraph(store) {
         const a = byId.get(link.a);
         const b = byId.get(link.b);
         if (!a || !b) continue;
-        const p = sideCenterPoints(a, b);
+        const { from, to } = spouseCurveEndpoints(link, a, b);
+        const d =
+          link.fromPort && link.toPort
+            ? pathBetweenPortEndpoints(from, to, link.fromPort, link.toPort)
+            : spouseCurvePath(from, to);
         out.push({
           key: `${kind}:${link.a}:${link.b}`,
-          d: spouseCurvePath(p.from, p.to),
+          d,
           className: "lines-layer-path lines-layer-path--spouse",
           payload: { kind: "spouse", a: link.a, b: link.b },
         });
@@ -150,15 +268,31 @@ export function useGraph(store) {
         const b = byId.get(link.b);
         const child = byId.get(link.child);
         if (!a || !b || !child) continue;
-        const ca = center(a);
-        const cb = center(b);
-        const union = { x: (ca.x + cb.x) / 2, y: (ca.y + cb.y) / 2 };
-        const mc = cardLayout(child);
-        const top = { x: child.x + mc.border + CARD_W / 2, y: child.y + mc.border };
-        const cy = union.y + (top.y - union.y) * 0.52;
+        const spouseL = store.links.find(
+          (l) => l.kind === "spouse" && ((l.a === link.a && l.b === link.b) || (l.a === link.b && l.b === link.a))
+        );
+        let union;
+        if (spouseL) {
+          const { from: pa, to: pb } = spouseCurveEndpoints(spouseL, a, b);
+          union = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 };
+        } else {
+          const ca = cardCenter(a);
+          const cb = cardCenter(b);
+          union = { x: (ca.x + cb.x) / 2, y: (ca.y + cb.y) / 2 };
+        }
+        let childPt;
+        if (link.childSide === "left" || link.childSide === "right") {
+          childPt = sidePortPoint(child, normalizeSide(link.childSide));
+        } else if (link.childSide === "top" || link.childSide === "bottom") {
+          childPt = verticalPortPoint(child, normalizeAnchor(link.childSide));
+        } else {
+          const mc = cardLayout(child);
+          childPt = { x: child.x + mc.border + CARD_W / 2, y: child.y + mc.border };
+        }
+        const cy = union.y + (childPt.y - union.y) * 0.52;
         out.push({
           key: `${kind}:${link.a}:${link.b}:${link.child}`,
-          d: `M ${union.x} ${union.y} C ${union.x} ${cy}, ${top.x} ${cy}, ${top.x} ${top.y}`,
+          d: `M ${union.x} ${union.y} C ${union.x} ${cy}, ${childPt.x} ${cy}, ${childPt.x} ${childPt.y}`,
           className: "lines-layer-path",
           payload: { kind: "childOfUnion", a: link.a, b: link.b, child: link.child },
         });
@@ -167,13 +301,21 @@ export function useGraph(store) {
     return out;
   });
 
+  function isVerticalPort(p) {
+    return p === "top" || p === "bottom";
+  }
+
+  function isSidePort(p) {
+    return p === "left" || p === "right";
+  }
+
   function portDown(cardId, port) {
     if (store.currentProjectReadOnly) return;
     if (pendingUnion.value) {
       const u = pendingUnion.value;
       pendingUnion.value = null;
-      if (port === "top" && cardId !== u.a && cardId !== u.b) {
-        store.addChildOfUnionLink(u.a, u.b, cardId);
+      if (cardId !== u.a && cardId !== u.b && (isVerticalPort(port) || isSidePort(port))) {
+        store.addChildOfUnionLink(u.a, u.b, cardId, port);
       }
       return;
     }
@@ -184,14 +326,13 @@ export function useGraph(store) {
     const first = pendingPort.value;
     pendingPort.value = null;
     if (first.cardId === cardId) return;
-    if ((first.port === "left" || first.port === "right") && (port === "left" || port === "right")) {
-      store.addSpouseLink(first.cardId, cardId);
-      return;
-    }
-    if (first.port === "top" && port === "top") {
-      store.addLineageLink(first.cardId, cardId);
-      return;
-    }
+
+    store.addEdgeLink(first.cardId, cardId, first.port, port);
+  }
+
+  function clearPendingConnections() {
+    pendingPort.value = null;
+    pendingUnion.value = null;
   }
 
   function armUnion(a, b) {
@@ -201,6 +342,5 @@ export function useGraph(store) {
     pendingPort.value = null;
   }
 
-  return { linksPath, unionNodes, pendingPort, pendingUnion, portDown, armUnion };
+  return { linksPath, unionNodes, pendingPort, pendingUnion, portDown, armUnion, clearPendingConnections };
 }
-

@@ -101,6 +101,9 @@ export const useTreeStore = defineStore("tree", {
       uncertainFio: false,
       uncertainBirth: false,
       uncertainBirthPlace: false,
+      vovParticipant: false,
+      notesText: "",
+      notesImages: [],
     },
     editDraft: {
       fio: "",
@@ -111,6 +114,9 @@ export const useTreeStore = defineStore("tree", {
       uncertainFio: false,
       uncertainBirth: false,
       uncertainBirthPlace: false,
+      vovParticipant: false,
+      notesText: "",
+      notesImages: [],
     },
     hasUnsavedChanges: false,
     isSaving: false,
@@ -302,6 +308,8 @@ export const useTreeStore = defineStore("tree", {
             maidenName: "",
             pinned: false,
             isUnknown: false,
+            notesText: "",
+            notesImages: [],
           });
         }
         this.showWelcome = this.cards.length === 0;
@@ -404,6 +412,9 @@ export const useTreeStore = defineStore("tree", {
         uncertainBirthPlace: payload.uncertainBirthPlace === true,
         pinned: !!payload.pinned,
         isUnknown: !!payload.isUnknown,
+        vovParticipant: payload.vovParticipant === true,
+        notesText: typeof payload.notesText === "string" ? payload.notesText : "",
+        notesImages: Array.isArray(payload.notesImages) ? payload.notesImages : [],
       };
       this.cards.push(card);
       this.markDirty();
@@ -427,26 +438,118 @@ export const useTreeStore = defineStore("tree", {
       this.markDirty();
     },
 
-    addLineageLink(from, to) {
+    /** Есть ли уже связь между двумя карточками (родство или пара). */
+    pairHasLink(idA, idB) {
+      if (!idA || !idB || idA === idB) return true;
+      return this.links.some((l) => {
+        if (l.kind === "spouse") return (l.a === idA && l.b === idB) || (l.a === idB && l.b === idA);
+        if ((l.kind || "lineage") === "lineage")
+          return (l.from === idA && l.to === idB) || (l.from === idB && l.to === idA);
+        return false;
+      });
+    },
+
+    /** Обычная связь: любой порт с любым; геометрия по fromPort / toPort (top|bottom|left|right). */
+    addEdgeLink(from, to, fromPort, toPort) {
       if (this.currentProjectReadOnly) return;
       if (from === to) return;
-      if (this.links.some((l) => (l.kind || "lineage") === "lineage" && l.from === from && l.to === to)) return;
-      this.links.push({ kind: "lineage", from, to });
+      if (this.pairHasLink(from, to)) return;
+      const fp = String(fromPort || "left");
+      const tp = String(toPort || "left");
+      this.links.push({ kind: "lineage", from, to, fromPort: fp, toPort: tp });
+      this.markDirty();
+    },
+
+    addLineageLink(from, to, fromSide = "left", toSide = "left") {
+      if (this.currentProjectReadOnly) return;
+      if (from === to) return;
+      if (this.pairHasLink(from, to)) return;
+      this.links.push({ kind: "lineage", from, to, fromSide, toSide });
       this.markDirty();
     },
 
     addSpouseLink(a, b) {
       if (this.currentProjectReadOnly) return;
       if (a === b) return;
-      if (this.links.some((l) => l.kind === "spouse" && ((l.a === a && l.b === b) || (l.a === b && l.b === a)))) return;
+      if (this.pairHasLink(a, b)) return;
       this.links.push({ kind: "spouse", a, b });
       this.markDirty();
     },
 
-    addChildOfUnionLink(a, b, child) {
+    addVerticalLineageLink(from, to) {
+      if (this.currentProjectReadOnly) return;
+      if (from === to) return;
+      if (this.pairHasLink(from, to)) return;
+      this.links.push({ kind: "lineage", from, to });
+      this.markDirty();
+    },
+
+    /** Обычная связь ↔ парная (узел для ребёнка). childOfUnion к этой паре блокирует смену пары на обычную. */
+    toggleLinkPairMode(payload) {
+      if (this.currentProjectReadOnly) return;
+      if (!payload || !payload.kind) return;
+      if (payload.kind === "childOfUnion") return;
+      if (payload.kind === "lineage") {
+        const from = payload.from;
+        const to = payload.to;
+        const idx = this.links.findIndex(
+          (l) => (l.kind || "lineage") === "lineage" && l.from === from && l.to === to
+        );
+        if (idx < 0) return;
+        if (this.links.some((l) => l.kind === "spouse" && ((l.a === from && l.b === to) || (l.a === to && l.b === from))))
+          return;
+        const L = this.links[idx];
+        const spouse = { kind: "spouse", a: from, b: to };
+        if (L.fromPort && L.toPort) {
+          spouse.fromPort = L.fromPort;
+          spouse.toPort = L.toPort;
+        } else if (L.fromSide != null && L.toSide != null) {
+          spouse.fromPort = L.fromSide === "right" ? "right" : "left";
+          spouse.toPort = L.toSide === "right" ? "right" : "left";
+        }
+        this.links.splice(idx, 1);
+        this.links.push(spouse);
+        this.markDirty();
+        return;
+      }
+      if (payload.kind === "spouse") {
+        const { a, b } = payload;
+        const hasChild = this.links.some(
+          (l) =>
+            l.kind === "childOfUnion" &&
+            ((l.a === a && l.b === b) || (l.a === b && l.b === a))
+        );
+        if (hasChild) return;
+        const idx = this.links.findIndex(
+          (l) => l.kind === "spouse" && ((l.a === a && l.b === b) || (l.a === b && l.b === a))
+        );
+        if (idx < 0) return;
+        const L = this.links[idx];
+        this.links.splice(idx, 1);
+        if (L.fromPort && L.toPort) {
+          this.links.push({ kind: "lineage", from: L.a, to: L.b, fromPort: L.fromPort, toPort: L.toPort });
+        } else {
+          const ca = this.cards.find((c) => c.id === a);
+          const cb = this.cards.find((c) => c.id === b);
+          let fromPort = "right";
+          let toPort = "left";
+          let from = a;
+          let to = b;
+          if (ca && cb && (Number(ca.x) || 0) > (Number(cb.x) || 0)) {
+            from = b;
+            to = a;
+          }
+          this.links.push({ kind: "lineage", from, to, fromPort, toPort });
+        }
+        this.markDirty();
+      }
+    },
+
+    /** childSide: left | right | top | bottom — порт ребёнка к узлу пары. */
+    addChildOfUnionLink(a, b, child, childSide = "left") {
       if (this.currentProjectReadOnly) return;
       if (this.links.some((l) => l.kind === "childOfUnion" && l.a === a && l.b === b && l.child === child)) return;
-      this.links.push({ kind: "childOfUnion", a, b, child });
+      this.links.push({ kind: "childOfUnion", a, b, child, childSide });
       this.markDirty();
     },
 

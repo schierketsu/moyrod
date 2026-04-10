@@ -612,7 +612,7 @@ const linkDeleteBannerText = computed(() => {
   if (!p) return "";
   if (p.kind === "spouse") return "Удалить связь пары?";
   if (p.kind === "childOfUnion") return "Удалить связь?";
-  return "Удалить родительскую связь?";
+  return "Удалить связь?";
 });
 const importProjectBannerText = computed(() => {
   const item = pendingImportRecommendation.value;

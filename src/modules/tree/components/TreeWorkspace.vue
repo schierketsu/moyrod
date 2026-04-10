@@ -27,9 +27,29 @@
             fill-rule="evenodd"
           />
         </svg>
+        <svg
+          class="field-lineage-guide"
+          :width="store.fieldW"
+          :height="store.fieldH"
+          aria-hidden="true"
+        >
+          <line
+            :x1="fieldLineageCenterX"
+            y1="0"
+            :x2="fieldLineageCenterX"
+            :y2="store.fieldH"
+            class="field-lineage-guide-line"
+          />
+          <line
+            x1="0"
+            :y1="fieldLineageCenterY"
+            :x2="store.fieldW"
+            :y2="fieldLineageCenterY"
+            class="field-lineage-guide-line"
+          />
+        </svg>
         <svg class="lines-layer" :width="store.fieldW" :height="store.fieldH" aria-hidden="true">
           <g v-for="line in linksPath" :key="line.key">
-            <!-- Атрибуты stroke/fill (не только CSS): в снимке foreignObject так стабильнее, чем таблица стилей -->
             <path
               :d="line.d"
               fill="none"
@@ -51,9 +71,34 @@
               pointer-events="visibleStroke"
               class="lines-layer-hit"
               style="cursor: pointer"
-              @pointerdown.stop.prevent="store.requestLinkDelete(line.payload)"
+              @pointerdown.stop.prevent="onLinkHitPointerDown($event, line.payload)"
             />
           </g>
+        </svg>
+        <svg
+          class="field-lineage-guide-labels"
+          :width="store.fieldW"
+          :height="store.fieldH"
+          aria-hidden="true"
+        >
+          <text
+            :x="fieldLineageLabelMotherX"
+            :y="fieldLineageLabelY"
+            text-anchor="middle"
+            dominant-baseline="middle"
+            class="field-lineage-guide-label"
+          >
+            Сторона матери
+          </text>
+          <text
+            :x="fieldLineageLabelFatherX"
+            :y="fieldLineageLabelY"
+            text-anchor="middle"
+            dominant-baseline="middle"
+            class="field-lineage-guide-label"
+          >
+            Сторона отца
+          </text>
         </svg>
         <div class="cards-layer" :style="{ width: `${store.fieldW}px`, height: `${store.fieldH}px` }">
           <article
@@ -65,6 +110,7 @@
               'family-card--self': isSelfCard(card.id),
               'family-card--pinned': card.pinned,
               'family-card--unknown': card.isUnknown,
+              'family-card--vov': card.vovParticipant === true,
               'family-card--selected': isCardSelected(card.id)
             }"
             :style="cardStyle(card)"
@@ -74,18 +120,36 @@
               v-if="!store.currentProjectReadOnly"
               class="card-port card-port--top"
               type="button"
+              :class="{ 'is-armed': pendingPort?.cardId === card.id && pendingPort?.port === 'top' }"
+              title="Соедините с любым портом другой карточки. Ребёнок пары: кружок между родителями, затем любой порт ребёнка"
+              aria-label="Порт сверху"
               @pointerdown.stop="portDown(card.id, 'top')"
+            />
+            <button
+              v-if="!store.currentProjectReadOnly"
+              class="card-port card-port--bottom"
+              type="button"
+              :class="{ 'is-armed': pendingPort?.cardId === card.id && pendingPort?.port === 'bottom' }"
+              title="Соедините с любым портом другой карточки. Ребёнок пары: кружок между родителями, затем любой порт ребёнка"
+              aria-label="Порт снизу"
+              @pointerdown.stop="portDown(card.id, 'bottom')"
             />
             <button
               v-if="!store.currentProjectReadOnly"
               class="card-port card-port--left"
               type="button"
+              :class="{ 'is-armed': pendingPort?.cardId === card.id && pendingPort?.port === 'left' }"
+              title="Соедините с любым портом другой карточки. Ребёнок пары: кружок между родителями, затем любой порт ребёнка"
+              aria-label="Боковой порт слева"
               @pointerdown.stop="portDown(card.id, 'left')"
             />
             <button
               v-if="!store.currentProjectReadOnly"
               class="card-port card-port--right"
               type="button"
+              :class="{ 'is-armed': pendingPort?.cardId === card.id && pendingPort?.port === 'right' }"
+              title="Соедините с любым портом другой карточки. Ребёнок пары: кружок между родителями, затем любой порт ребёнка"
+              aria-label="Боковой порт справа"
               @pointerdown.stop="portDown(card.id, 'right')"
             />
             <div class="card-drag" :class="{ 'card-drag--labeled': !!card.title }" @pointerdown.prevent.stop="startDrag($event, card)">
@@ -146,6 +210,25 @@
                     </div>
                   </div>
                 </div>
+                <div
+                  v-if="cardHasNotes(card)"
+                  class="card-notes-preview"
+                  :class="{ 'card-notes-preview--unknown': card.isUnknown }"
+                >
+                  <div v-if="notesTextTrim(card.notesText)" class="card-notes-preview-text">{{ card.notesText }}</div>
+                  <div v-if="card.notesImages?.length" class="card-notes-preview-images">
+                    <button
+                      v-for="(im, idx) in card.notesImages"
+                      :key="im.id || `${card.id}-nimg-${idx}`"
+                      type="button"
+                      class="card-notes-preview-img-btn"
+                      aria-label="Открыть фото на весь экран"
+                      @click.stop="openNotesImageLightbox(im.dataUrl)"
+                    >
+                      <img class="card-notes-preview-img" :src="im.dataUrl" alt="" />
+                    </button>
+                  </div>
+                </div>
               </div>
               <div class="card-body-rail" aria-hidden="true">
                 <span
@@ -177,6 +260,8 @@
           <button
             type="button"
             class="union-port"
+            title="Ребёнок пары: нажмите, затем любой порт карточки ребёнка"
+            aria-label="Узел пары: присоединить ребёнка к любому порту ребёнка"
             :class="{ 'is-armed': pendingUnion && pendingUnion.a === u.a && pendingUnion.b === u.b }"
             @pointerdown.stop.prevent="armUnion(u.a, u.b)"
           ></button>
@@ -225,7 +310,9 @@
     <aside class="side-panel" :class="{ 'is-open': store.showNewCardPanel }" :inert="!store.showNewCardPanel">
       <div class="side-panel-inner">
         <h2 class="side-panel-title">Новая карточка</h2>
-        <form class="side-panel-form" @submit.prevent="addCardFromDraft">
+        <form class="side-panel-form side-panel-form--stack" @submit.prevent="addCardFromDraft">
+          <div class="side-panel-form-body">
+          <div class="side-panel-form-col side-panel-form-col--main">
           <div class="side-panel-field">
             <label class="side-panel-field-row">
               <span>ФИО</span>
@@ -301,10 +388,33 @@
             <label>Девичья фамилия</label>
             <input v-model="store.newCardDraft.maidenName" type="text" maxlength="80" />
           </div>
-          <div class="side-panel-actions side-panel-actions--new-card-submit">
-            <button type="submit" class="btn primary">{{ isNewCardEmpty ? "Создать пустую карточку" : "Создать карточку" }}</button>
+          <details class="side-panel-details side-panel-details--under-fields">
+            <summary class="side-panel-details-summary">
+              <span class="side-panel-details-summary-chevron" aria-hidden="true"></span>
+              <span class="side-panel-details-summary-title">Дополнительно</span>
+            </summary>
+            <div class="side-panel-details-body">
+              <div class="side-panel-extra-flags">
+                <button
+                  type="button"
+                  class="side-panel-flag-btn"
+                  :class="{ 'is-active': store.newCardDraft.vovParticipant }"
+                  :aria-pressed="store.newCardDraft.vovParticipant === true"
+                  @click="store.newCardDraft.vovParticipant = !store.newCardDraft.vovParticipant"
+                >
+                  Участник ВОВ
+                </button>
+              </div>
+            </div>
+          </details>
           </div>
-          <p class="field-uncertain-hint">Отметьте квадрат у поля, если информация требует проверки.</p>
+          </div>
+          <div class="side-panel-form-footer">
+            <div class="side-panel-actions side-panel-actions--new-card-submit">
+              <button type="submit" class="btn primary">{{ isNewCardEmpty ? "Создать пустую карточку" : "Создать карточку" }}</button>
+            </div>
+            <p class="field-uncertain-hint">Отметьте квадрат у поля, если информация требует проверки.</p>
+          </div>
         </form>
       </div>
     </aside>
@@ -314,10 +424,16 @@
       :class="{ 'is-open': store.showEditCardPanel }"
       @click="closeEditPanel"
     ></div>
-    <aside class="side-panel" :class="{ 'is-open': store.showEditCardPanel }" :inert="!store.showEditCardPanel">
+    <aside
+      class="side-panel side-panel--wide"
+      :class="{ 'is-open': store.showEditCardPanel }"
+      :inert="!store.showEditCardPanel"
+    >
       <div class="side-panel-inner">
         <h2 class="side-panel-title">Редактирование карточки</h2>
-        <form class="side-panel-form" @submit.prevent="saveEdit">
+        <form class="side-panel-form side-panel-form--stack" @submit.prevent="saveEdit">
+          <div class="side-panel-form-body side-panel-form-body--two-cols">
+          <div class="side-panel-form-col side-panel-form-col--main">
           <div class="side-panel-field">
             <label class="side-panel-field-row">
               <span>ФИО</span>
@@ -393,15 +509,138 @@
             <label>Девичья фамилия</label>
             <input v-model="store.editDraft.maidenName" type="text" maxlength="80" />
           </div>
-          <div class="side-panel-actions">
-            <button type="button" class="btn" @click="store.showEditCardPanel = false">Отмена</button>
-            <button type="submit" class="btn primary">Сохранить</button>
+          <details class="side-panel-details side-panel-details--under-fields">
+            <summary class="side-panel-details-summary">
+              <span class="side-panel-details-summary-chevron" aria-hidden="true"></span>
+              <span class="side-panel-details-summary-title">Дополнительно</span>
+            </summary>
+            <div class="side-panel-details-body">
+              <div class="side-panel-extra-flags">
+                <button
+                  type="button"
+                  class="side-panel-flag-btn"
+                  :class="{ 'is-active': store.editDraft.vovParticipant }"
+                  :aria-pressed="store.editDraft.vovParticipant === true"
+                  @click="toggleEditVovParticipant"
+                >
+                  Участник ВОВ
+                </button>
+              </div>
+            </div>
+          </details>
           </div>
-          <p class="field-uncertain-hint">Отметьте квадрат у поля, если информация требует проверки.</p>
+          <div class="side-panel-form-col side-panel-form-col--notes">
+            <div class="side-panel-field side-panel-field--notes">
+              <label for="edit-card-notes-text">Заметки</label>
+              <textarea
+                id="edit-card-notes-text"
+                v-model="store.editDraft.notesText"
+                class="side-panel-field-textarea"
+                rows="14"
+                placeholder="Любая информация…"
+                @paste="onEditNotesPaste"
+              />
+              <input
+                ref="editNotesFileInput"
+                type="file"
+                accept="image/*"
+                multiple
+                class="side-panel-notes-file-input"
+                @change="onEditNotesFiles"
+              />
+              <button
+                type="button"
+                class="side-panel-notes-attach"
+                title="До 24 изображений, до 4 МБ; можно вставить картинку из буфера (Ctrl+V) в поле заметок"
+                @click="triggerEditNotesFilePick"
+              >
+                Прикрепить фото
+              </button>
+              <div v-if="store.editDraft.notesImages?.length" class="side-panel-notes-thumbs">
+                <div v-for="im in store.editDraft.notesImages" :key="im.id" class="side-panel-notes-thumb">
+                  <button
+                    type="button"
+                    class="side-panel-notes-thumb-open"
+                    aria-label="Открыть фото на весь экран"
+                    @click="openNotesImageLightbox(im.dataUrl)"
+                  >
+                    <img :src="im.dataUrl" alt="" />
+                  </button>
+                  <button
+                    type="button"
+                    class="side-panel-notes-thumb-remove"
+                    title="Убрать из заметок"
+                    aria-label="Убрать фото"
+                    @click.stop="removeEditNoteImage(im.id)"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          </div>
+          <div class="side-panel-form-footer">
+            <div class="side-panel-actions">
+              <button type="button" class="btn" @click="store.showEditCardPanel = false">Отмена</button>
+              <button type="submit" class="btn primary">Сохранить</button>
+            </div>
+            <p class="field-uncertain-hint">Отметьте квадрат у поля, если информация требует проверки.</p>
+          </div>
         </form>
       </div>
     </aside>
   </div>
+  <Teleport to="body">
+    <div
+      v-if="linkLineMenu"
+      class="link-line-action-menu"
+      role="menu"
+      :style="linkLineMenuStyle"
+      @pointerdown.stop
+    >
+      <button
+        v-if="canToggleLinkKind(linkLineMenu.payload)"
+        type="button"
+        class="link-line-action-menu-btn"
+        role="menuitem"
+        title="Обычная связь ↔ парная (появится узел для ребёнка)"
+        @click="onLinkMenuToggle"
+      >
+        Изменить
+      </button>
+      <button
+        type="button"
+        class="link-line-action-menu-btn"
+        role="menuitem"
+        title="Удалить связь"
+        @click="onLinkMenuDeleteRequest"
+      >
+        Удалить
+      </button>
+    </div>
+  </Teleport>
+  <Teleport to="body">
+    <div
+      v-if="notesImageLightbox"
+      class="notes-image-lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Просмотр фото"
+      @click.self="closeNotesImageLightbox"
+    >
+      <button
+        type="button"
+        class="notes-image-lightbox-close"
+        title="Закрыть"
+        aria-label="Закрыть"
+        @click="closeNotesImageLightbox"
+      >
+        ×
+      </button>
+      <img class="notes-image-lightbox-img" :src="notesImageLightbox.src" alt="" @click.stop />
+    </div>
+  </Teleport>
 </template>
 
 <script setup>
@@ -417,6 +656,14 @@ import { BIRTH_MONTH_OPTIONS, buildBirthFromParts, parseBirthParts } from "../..
 
 const store = useTreeStore();
 const router = useRouter();
+
+const fieldLineageCenterX = computed(() => store.fieldW / 2);
+const fieldLineageCenterY = computed(() => store.fieldH / 2);
+const fieldLineageLabelOffsetFrac = 0.1;
+const fieldLineageLabelMotherX = computed(() => store.fieldW * (0.5 - fieldLineageLabelOffsetFrac));
+const fieldLineageLabelFatherX = computed(() => store.fieldW * (0.5 + fieldLineageLabelOffsetFrac));
+const fieldLineageLabelYOffset = 64;
+const fieldLineageLabelY = computed(() => store.fieldH / 2 + fieldLineageLabelYOffset);
 
 function goMyProfile() {
   router.push("/myprofile");
@@ -451,8 +698,76 @@ const viewportClickState = reactive({
   startClientX: 0,
   startClientY: 0,
 });
-const { linksPath, unionNodes, pendingUnion, portDown, armUnion } = useGraph(store);
-const { cardStyle, startDrag, onDragMove, onDragEnd, addCardFromDraft, openEdit, saveEdit, closeNewPanel, closeEditPanel } = useCards(store, {
+const { linksPath, unionNodes, pendingPort, pendingUnion, portDown, armUnion, clearPendingConnections } = useGraph(store);
+
+const linkLineMenu = ref(null);
+
+const linkLineMenuStyle = computed(() => {
+  const m = linkLineMenu.value;
+  if (!m) return {};
+  const pad = 6;
+  const menuW = 220;
+  const menuH = 88;
+  let left = m.x + pad;
+  let top = m.y + pad;
+  if (typeof window !== "undefined") {
+    left = Math.min(Math.max(6, left), window.innerWidth - menuW - 6);
+    top = Math.min(Math.max(6, top), window.innerHeight - menuH - 6);
+  }
+  return { left: `${left}px`, top: `${top}px` };
+});
+
+function canToggleLinkKind(p) {
+  if (!p || store.currentProjectReadOnly) return false;
+  if (p.kind === "childOfUnion") return false;
+  if (p.kind === "lineage") return true;
+  if (p.kind === "spouse") {
+    return !store.links.some(
+      (l) =>
+        l.kind === "childOfUnion" &&
+        ((l.a === p.a && l.b === p.b) || (l.a === p.b && l.b === p.a))
+    );
+  }
+  return false;
+}
+
+function onLinkHitPointerDown(ev, payload) {
+  if (store.currentProjectReadOnly) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  clearPendingConnections();
+  linkLineMenu.value = { x: ev.clientX, y: ev.clientY, payload };
+}
+
+function closeLinkLineMenu() {
+  linkLineMenu.value = null;
+}
+
+function onLinkMenuToggle() {
+  const m = linkLineMenu.value;
+  if (!m) return;
+  store.toggleLinkPairMode(m.payload);
+  closeLinkLineMenu();
+}
+
+function onLinkMenuDeleteRequest() {
+  const m = linkLineMenu.value;
+  if (!m) return;
+  store.requestLinkDelete(m.payload);
+  closeLinkLineMenu();
+}
+const {
+  cardStyle,
+  startDrag,
+  onDragMove,
+  onDragEnd,
+  addCardFromDraft,
+  openEdit,
+  saveEdit,
+  closeNewPanel,
+  closeEditPanel,
+  toggleEditVovParticipant,
+} = useCards(store, {
   fieldCoordsFromClient,
   getSelectedCardIds: () => [...selectedCardIds.value],
   isSelected: (id) => selectedCardIds.value.includes(id),
@@ -460,9 +775,141 @@ const { cardStyle, startDrag, onDragMove, onDragEnd, addCardFromDraft, openEdit,
     selectedCardIds.value = id ? [id] : [];
   },
 });
-const isNewCardEmpty = computed(
-  () => !store.newCardDraft.fio && !store.newCardDraft.birth && !store.newCardDraft.birthPlace
+const MAX_NOTES_IMAGES = 24;
+const MAX_NOTE_IMAGE_BYTES = 4 * 1024 * 1024;
+
+const editNotesFileInput = ref(null);
+const notesImageLightbox = ref(null);
+
+function uidNoteImage() {
+  return `ni_${Math.random().toString(36).slice(2, 11)}`;
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ""));
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+function triggerEditNotesFilePick() {
+  editNotesFileInput.value?.click();
+}
+
+async function addFilesToEditDraftNotes(fileList) {
+  const draft = store.editDraft;
+  if (!Array.isArray(draft.notesImages)) draft.notesImages = [];
+  const files = Array.isArray(fileList) ? fileList : Array.from(fileList || []);
+  for (const file of files) {
+    if (draft.notesImages.length >= MAX_NOTES_IMAGES) break;
+    if (!file.type.startsWith("image/")) continue;
+    if (file.size > MAX_NOTE_IMAGE_BYTES) continue;
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      if (!dataUrl.startsWith("data:image/")) continue;
+      draft.notesImages.push({
+        id: uidNoteImage(),
+        dataUrl,
+        name: file.name || "image.png",
+      });
+    } catch {}
+  }
+}
+
+async function onEditNotesFiles(ev) {
+  const input = ev.target;
+  const { files } = input;
+  if (files?.length) await addFilesToEditDraftNotes(files);
+  input.value = "";
+}
+
+async function onEditNotesPaste(ev) {
+  const dt = ev.clipboardData;
+  if (!dt) return;
+  const imageFiles = [];
+  if (dt.items?.length) {
+    for (let i = 0; i < dt.items.length; i += 1) {
+      const it = dt.items[i];
+      if (it.kind === "file" && it.type.startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) imageFiles.push(f);
+      }
+    }
+  }
+  if (!imageFiles.length && dt.files?.length) {
+    for (let i = 0; i < dt.files.length; i += 1) {
+      const f = dt.files[i];
+      if (f.type.startsWith("image/")) imageFiles.push(f);
+    }
+  }
+  if (!imageFiles.length) return;
+  ev.preventDefault();
+  await addFilesToEditDraftNotes(imageFiles);
+}
+
+function openNotesImageLightbox(src) {
+  if (typeof src === "string" && src.startsWith("data:image/")) {
+    notesImageLightbox.value = { src };
+  }
+}
+
+function closeNotesImageLightbox() {
+  notesImageLightbox.value = null;
+}
+
+function onNotesLightboxKeydown(ev) {
+  if (ev.key === "Escape") closeNotesImageLightbox();
+}
+
+function removeEditNoteImage(id) {
+  const arr = store.editDraft.notesImages;
+  if (!Array.isArray(arr)) return;
+  const row = arr.find((x) => x.id === id);
+  if (row && notesImageLightbox.value?.src === row.dataUrl) closeNotesImageLightbox();
+  const i = arr.findIndex((x) => x.id === id);
+  if (i >= 0) arr.splice(i, 1);
+}
+
+watch(
+  () => store.showEditCardPanel,
+  (open) => {
+    if (!open) closeNotesImageLightbox();
+  }
 );
+
+watch(
+  () => store.editingCardId,
+  () => {
+    closeNotesImageLightbox();
+  }
+);
+
+watch(notesImageLightbox, (v) => {
+  if (v) {
+    document.addEventListener("keydown", onNotesLightboxKeydown);
+    document.body.style.overflow = "hidden";
+  } else {
+    document.removeEventListener("keydown", onNotesLightboxKeydown);
+    document.body.style.overflow = "";
+  }
+});
+
+function notesTextTrim(t) {
+  return !!(t && String(t).trim());
+}
+
+function cardHasNotes(card) {
+  if (!card) return false;
+  if (notesTextTrim(card.notesText)) return true;
+  return Array.isArray(card.notesImages) && card.notesImages.length > 0;
+}
+
+const isNewCardEmpty = computed(() => {
+  const d = store.newCardDraft;
+  return !d.fio && !d.birth && !d.birthPlace;
+});
 const CARD_W = 232;
 const CARD_H = 204;
 const newPlaceSuggestions = ref([]);
@@ -474,22 +921,22 @@ const birthMonthOptions = BIRTH_MONTH_OPTIONS;
 const newBirth = reactive({ day: "", month: "", year: "" });
 const editBirth = reactive({ day: "", month: "", year: "" });
 const cloudPalette = [
-  "rgba(80, 170, 255, 0.24)",   // blue
-  "rgba(142, 112, 255, 0.24)",  // violet
-  "rgba(255, 176, 46, 0.24)",   // amber
-  "rgba(255, 122, 168, 0.24)",  // pink
-  "rgba(70, 206, 191, 0.24)",   // turquoise
-  "rgba(124, 214, 82, 0.23)",   // lime
-  "rgba(255, 147, 98, 0.23)",   // coral
-  "rgba(88, 199, 255, 0.23)",   // cyan
-  "rgba(185, 122, 255, 0.23)",  // purple
-  "rgba(255, 196, 74, 0.23)",   // yellow
-  "rgba(255, 106, 147, 0.22)",  // rose
-  "rgba(94, 180, 255, 0.23)",   // sky
-  "rgba(74, 219, 166, 0.22)",   // mint
-  "rgba(255, 136, 84, 0.22)",   // orange
-  "rgba(115, 149, 255, 0.23)",  // indigo
-  "rgba(57, 205, 228, 0.22)",   // aqua
+  "rgba(80, 170, 255, 0.24)",
+  "rgba(142, 112, 255, 0.24)",
+  "rgba(255, 176, 46, 0.24)",
+  "rgba(255, 122, 168, 0.24)",
+  "rgba(70, 206, 191, 0.24)",
+  "rgba(124, 214, 82, 0.23)",
+  "rgba(255, 147, 98, 0.23)",
+  "rgba(88, 199, 255, 0.23)",
+  "rgba(185, 122, 255, 0.23)",
+  "rgba(255, 196, 74, 0.23)",
+  "rgba(255, 106, 147, 0.22)",
+  "rgba(94, 180, 255, 0.23)",
+  "rgba(74, 219, 166, 0.22)",
+  "rgba(255, 136, 84, 0.22)",
+  "rgba(115, 149, 255, 0.23)",
+  "rgba(57, 205, 228, 0.22)",
 ];
 
 function convexHull(points) {
@@ -607,12 +1054,10 @@ function segmentsIntersect(a, b, c, d) {
 
 function polygonIntersectsRect(polygon, rect) {
   if (!polygon || polygon.length < 2) return false;
-  // 1) Вершина полигона в прямоугольнике
   const polyVertexInsideRect = polygon.some(
     (p) => p.x >= rect.left && p.x <= rect.right && p.y >= rect.top && p.y <= rect.bottom
   );
   if (polyVertexInsideRect) return true;
-  // 2) Угол прямоугольника внутри полигона
   const corners = [
     { x: rect.left, y: rect.top },
     { x: rect.right, y: rect.top },
@@ -620,7 +1065,6 @@ function polygonIntersectsRect(polygon, rect) {
     { x: rect.right, y: rect.bottom },
   ];
   if (corners.some((p) => pointInPolygon(p, polygon))) return true;
-  // 3) Пересечение рёбер
   const rectEdges = [
     [corners[0], corners[1]],
     [corners[1], corners[3]],
@@ -737,7 +1181,6 @@ const surnameClouds = computed(() => {
     }
   }
 
-  // Кровные связи: только родитель-ребенок (lineage, childOfUnion), без spouse.
   const bloodAdj = new Map();
   const addBloodEdge = (a, b) => {
     if (!a || !b) return;
@@ -836,7 +1279,6 @@ const surnameClouds = computed(() => {
   };
   for (const [canonSurnameKey, cards] of byCanon.entries()) {
     if (!cards || cards.length < 2) continue;
-    // Если однофамильцы далеко и не связаны, делим на отдельные группы-компоненты.
     const parent = new Map(cards.map((c) => [c.id, c.id]));
     const find = (x) => {
       let p = parent.get(x);
@@ -876,9 +1318,6 @@ const surnameClouds = computed(() => {
       if (bloodCoreIds.size === 0) {
         for (const x of items) bloodCoreIds.add(x.id);
       }
-      // Приоритет "родного" облака:
-      // если карточка входит в текущую группу только как вторичная (например, девичья фамилия),
-      // а ее родная фамилия другая, для этого облака она считается "чужой" и получает карман.
       const allOthers = (store.cards || []).filter((c) => {
         if (!memberIds.has(c.id)) return true;
         const ownerCanon = ownerCanonById.get(c.id) || "";
@@ -888,11 +1327,8 @@ const surnameClouds = computed(() => {
         const maidenCanon = maidenCanonById.get(c.id) || "";
         const hasBloodToCore = hasBloodPathToAny(c.id, bloodCoreIds);
 
-        // Женщина с девичьей фамилией этой семьи может принадлежать двум облакам.
         if (gender === "f" && maidenCanon === canonSurnameKey) return false;
-        // Мужчина без кровной связи с этой семьей должен получать карман.
         if (gender === "m" && !hasBloodToCore) return true;
-        // Для остальных вторичных участников оставляем строгий режим (карман).
         return true;
       });
       const pad = 56;
@@ -900,8 +1336,6 @@ const surnameClouds = computed(() => {
       const outer = cloudPathFromHull(hull);
       if (!outer) continue;
 
-      // Локальная коррекция формы: вырезы только там, где чужая карточка
-      // пересекает облако хотя бы частично.
       const holePad = 22;
       const holes = [];
       const hullBox = polygonBbox(hull);
@@ -979,7 +1413,6 @@ function withMaidenName(card) {
   if (!fioRaw || !maiden) return fioRaw;
   const parts = fioRaw.split(/\s+/).filter(Boolean);
   if (parts.length === 0) return fioRaw;
-  // Показываем девичью фамилию рядом с основной фамилией.
   parts[0] = `${parts[0]} (${maiden})`;
   return parts.join(" ");
 }
@@ -1012,6 +1445,9 @@ function clearSelectionBox() {
 }
 
 function onViewportPointerDown(ev) {
+  if (linkLineMenu.value && !(ev.target instanceof Element && ev.target.closest(".link-line-action-menu"))) {
+    linkLineMenu.value = null;
+  }
   const onCard = ev.target.closest(".family-card");
   if (onCard) return;
   if (ev.target.closest(".map-zoom-tools")) return;
@@ -1020,8 +1456,6 @@ function onViewportPointerDown(ev) {
   viewportClickState.moved = false;
   viewportClickState.startClientX = ev.clientX;
   viewportClickState.startClientY = ev.clientY;
-  // Обычный drag по пустому месту — панорама карты.
-  // Shift + drag — рамка выделения карточек.
   const wantsSelectionBox = ev.shiftKey === true;
   if (!wantsSelectionBox) {
     onViewportPanPointerDown(ev);
@@ -1205,7 +1639,6 @@ function relationTitleByPath(pathInfo, targetGender) {
     return descendantTitle(targetGender, path.length);
   }
 
-  // Боковые кровные ветки: N шагов вверх к общему предку, затем M шагов вниз.
   const up = path.findIndex((r) => r !== "parent");
   if (up > 0) {
     const downPart = path.slice(up);
@@ -1284,7 +1717,6 @@ function linkLineStrokeOpacity(line) {
   return (line.className || "").includes("lines-layer-path--spouse") ? 0.92 : 0.88;
 }
 
-/** Для сплошной линии не задаём dasharray (undefined — атрибут не рендерится). */
 function linkLineStrokeDasharray(line) {
   return (line.className || "").includes("lines-layer-path--spouse") ? "5 6" : undefined;
 }
@@ -1297,26 +1729,19 @@ function exportFilterForShare(node) {
   if (node.classList.contains("union-node")) return false;
   if (node.classList.contains("selection-box")) return false;
   if (node.classList.contains("card-body-help")) return false;
+  if (node.classList.contains("field-lineage-guide-labels")) return false;
   return true;
 }
 
-/** Лимит стороны SVG→bitmap: иначе декодер обрезает картинку (видна «часть карты»). */
 const EXPORT_BITMAP_MAX_SIDE = 8192;
-/** Итоговый canvas (html-to-image) до внутреннего авто-скейла. */
 const EXPORT_CANVAS_MAX_SIDE = 16384;
 
-/**
- * В снимке foreignObject клону не видны внешние таблицы стилей — инлайнится computed style.
- * Для path с stroke из var(--line) и облаков с opacity это даёт кривой вид; перед клоном включаем
- * глобальные правила с !important, clone-node снимает уже исправленный getComputedStyle.
- */
 const EXPORT_SNAPSHOT_STYLE_ID = "svoi-korni-export-snapshot-css";
 
 const EXPORT_SNAPSHOT_CSS = `
 .lines-layer {
   shape-rendering: geometricPrecision !important;
 }
-/* Запас от заливки; обводка задаётся инлайном на path (linkLineVisualStyle) */
 .lines-layer path {
   fill: none !important;
 }
@@ -1331,10 +1756,6 @@ const EXPORT_SNAPSHOT_CSS = `
 }
 `;
 
-/**
- * PNG всего поля: масштаб под декодер SVG, корень клона — scale (через options.style), линии/облака — см. EXPORT_SNAPSHOT_CSS.
- * @returns {Promise<{ ok: true, blob: Blob } | { ok: false, error: string }>}
- */
 async function exportFamilyMapPng(options = {}) {
   const el = mapWorldRef.value;
   if (!el) return { ok: false, error: "no_element" };
@@ -1373,7 +1794,6 @@ async function exportFamilyMapPng(options = {}) {
       backgroundColor: "#ecefed",
       filter: exportFilterForShare,
       cacheBust: true,
-      /** Иначе чтение cssRules с fonts.googleapis.com даёт SecurityError и портит растеризацию. */
       skipFonts: true,
       style: {
         boxSizing: "border-box",
@@ -1404,6 +1824,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  document.removeEventListener("keydown", onNotesLightboxKeydown);
+  document.body.style.overflow = "";
   clearSelectionBox();
   viewportClickState.active = false;
   viewportClickState.pointerId = null;
